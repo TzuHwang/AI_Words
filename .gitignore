@@ -1,0 +1,18 @@
+# Runtime config (contains local model settings; regenerated on first run)
+config.json
+
+# User skills (keep the directory, ignore the skill files)
+skills/*.md
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

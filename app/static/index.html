@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI Words</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div id="app">
+    <!-- Left: document editor (LibreOffice Writer style) -->
+    <section id="editor-pane">
+      <input type="file" id="file-input" accept=".odt,.html,.htm" hidden>
+
+      <!-- Menu bar -->
+      <nav class="lo-menubar" id="menubar">
+        <div class="lo-menu" data-menu="file">
+          <span class="lo-menu-label">File</span>
+          <div class="lo-menu-list">
+            <button data-act="new">New</button>
+            <button data-act="open">Open…</button>
+            <div class="lo-menu-sep"></div>
+            <button data-act="save-odt">Export as ODT</button>
+            <button data-act="save-html">Export as HTML</button>
+          </div>
+        </div>
+        <div class="lo-menu" data-menu="edit">
+          <span class="lo-menu-label">Edit</span>
+          <div class="lo-menu-list">
+            <button data-cmd="undo">Undo</button>
+            <button data-cmd="redo">Redo</button>
+            <div class="lo-menu-sep"></div>
+            <button data-cmd="cut">Cut</button>
+            <button data-cmd="copy">Copy</button>
+            <button data-cmd="paste">Paste</button>
+            <div class="lo-menu-sep"></div>
+            <button data-cmd="selectAll">Select All</button>
+          </div>
+        </div>
+        <div class="lo-menu" data-menu="insert">
+          <span class="lo-menu-label">Insert</span>
+          <div class="lo-menu-list">
+            <button data-act="insert-hr">Horizontal Rule</button>
+            <button data-act="insert-page-break">Page Break</button>
+            <button data-act="insert-table">Table…</button>
+            <button data-act="insert-link">Hyperlink…</button>
+          </div>
+        </div>
+        <div class="lo-menu" data-menu="format">
+          <span class="lo-menu-label">Format</span>
+          <div class="lo-menu-list">
+            <button data-cmd="bold">Bold</button>
+            <button data-cmd="italic">Italic</button>
+            <button data-cmd="underline">Underline</button>
+            <button data-cmd="strikeThrough">Strikethrough</button>
+            <div class="lo-menu-sep"></div>
+            <button data-cmd="removeFormat">Clear Direct Formatting</button>
+          </div>
+        </div>
+        <div class="lo-menu" data-menu="table">
+          <span class="lo-menu-label">Table</span>
+          <div class="lo-menu-list">
+            <button data-act="insert-table">Insert Table…</button>
+          </div>
+        </div>
+        <div class="lo-menu" data-menu="tools">
+          <span class="lo-menu-label">Tools</span>
+          <div class="lo-menu-list">
+            <button data-act="skills">Skills…</button>
+          </div>
+        </div>
+        <div class="lo-menu" data-menu="help">
+          <span class="lo-menu-label">Help</span>
+          <div class="lo-menu-list">
+            <button data-act="about">About AI Words</button>
+          </div>
+        </div>
+      </nav>
+
+      <!-- Formatting toolbar -->
+      <div class="lo-toolbar" id="toolbar">
+        <button class="lo-tb-btn" data-act="new" title="New">🗎</button>
+        <button class="lo-tb-btn" data-act="open" title="Open">📂</button>
+        <div class="lo-dropdown">
+          <button class="lo-tb-btn" data-act="save-menu" title="Save / Export">💾 ▾</button>
+          <div class="lo-menu-list" id="save-menu">
+            <button data-act="save-odt">Export as ODT</button>
+            <button data-act="save-html">Export as HTML</button>
+          </div>
+        </div>
+        <span class="lo-tb-sep"></span>
+        <button class="lo-tb-btn" data-cmd="undo" title="Undo">↶</button>
+        <button class="lo-tb-btn" data-cmd="redo" title="Redo">↷</button>
+        <span class="lo-tb-sep"></span>
+
+        <select class="lo-combo lo-style" id="style-select" title="Paragraph style">
+          <option value="p">Default Paragraph Style</option>
+          <option value="h1">Heading 1</option>
+          <option value="h2">Heading 2</option>
+          <option value="h3">Heading 3</option>
+          <option value="pre">Preformatted Text</option>
+          <option value="blockquote">Quotation</option>
+        </select>
+        <select class="lo-combo lo-font" id="font-select" title="Font name">
+          <optgroup label="中文字體">
+            <option value="&quot;新細明體&quot;, PMingLiU, serif">新細明體 (PMingLiU)</option>
+            <option value="&quot;細明體&quot;, MingLiU, serif">細明體 (MingLiU)</option>
+            <option value="&quot;標楷體&quot;, DFKai-SB, BiauKai, cursive">標楷體 (DFKai-SB)</option>
+            <option value="&quot;微軟正黑體&quot;, &quot;Microsoft JhengHei&quot;, sans-serif">微軟正黑體 (JhengHei)</option>
+            <option value="&quot;微軟雅黑&quot;, &quot;Microsoft YaHei&quot;, sans-serif">微軟雅黑 (YaHei)</option>
+            <option value="&quot;宋體&quot;, SimSun, serif">宋體 (SimSun)</option>
+            <option value="&quot;黑體&quot;, SimHei, sans-serif">黑體 (SimHei)</option>
+            <option value="&quot;楷體&quot;, KaiTi, cursive">楷體 (KaiTi)</option>
+            <option value="&quot;Noto Sans TC&quot;, sans-serif">Noto Sans TC</option>
+            <option value="&quot;Noto Serif TC&quot;, serif">Noto Serif TC</option>
+          </optgroup>
+          <optgroup label="Latin">
+            <option value="Liberation Serif, Times New Roman, serif">Liberation Serif</option>
+            <option value="Liberation Sans, Arial, sans-serif">Liberation Sans</option>
+            <option value="Times New Roman, serif">Times New Roman</option>
+            <option value="Arial, sans-serif">Arial</option>
+            <option value="Calibri, sans-serif">Calibri</option>
+            <option value="Georgia, serif">Georgia</option>
+            <option value="Courier New, monospace">Courier New</option>
+            <option value="Comic Sans MS, cursive">Comic Sans MS</option>
+          </optgroup>
+        </select>
+        <select class="lo-combo lo-size" id="size-select" title="Font size">
+          <option>8</option><option>9</option><option>10</option><option>11</option>
+          <option selected>12</option><option>14</option><option>16</option><option>18</option>
+          <option>20</option><option>24</option><option>28</option><option>36</option>
+          <option>48</option><option>72</option>
+        </select>
+        <span class="lo-tb-sep"></span>
+
+        <button class="lo-tb-btn" data-cmd="bold" title="Bold"><b>B</b></button>
+        <button class="lo-tb-btn" data-cmd="italic" title="Italic"><i>I</i></button>
+        <button class="lo-tb-btn" data-cmd="underline" title="Underline"><u>U</u></button>
+        <button class="lo-tb-btn" data-cmd="strikeThrough" title="Strikethrough"><s>S</s></button>
+        <label class="lo-tb-color" title="Font color">
+          <span class="lo-color-glyph" style="border-bottom-color:#c00">A</span>
+          <input type="color" id="fore-color" value="#cc0000">
+        </label>
+        <label class="lo-tb-color" title="Highlighting color">
+          <span class="lo-color-glyph lo-hl">▉</span>
+          <input type="color" id="back-color" value="#ffff00">
+        </label>
+        <span class="lo-tb-sep"></span>
+
+        <button class="lo-tb-btn" data-cmd="justifyLeft" title="Align left">⯇</button>
+        <button class="lo-tb-btn" data-cmd="justifyCenter" title="Center">≡</button>
+        <button class="lo-tb-btn" data-cmd="justifyRight" title="Align right">⯈</button>
+        <button class="lo-tb-btn" data-cmd="justifyFull" title="Justified">☰</button>
+        <span class="lo-tb-sep"></span>
+
+        <button class="lo-tb-btn" data-cmd="insertUnorderedList" title="Bullet list">•</button>
+        <button class="lo-tb-btn" data-cmd="insertOrderedList" title="Numbered list">1.</button>
+        <button class="lo-tb-btn" data-cmd="outdent" title="Decrease indent">⇤</button>
+        <button class="lo-tb-btn" data-cmd="indent" title="Increase indent">⇥</button>
+        <button class="lo-tb-btn lo-tb-end" data-act="toggle-ai" id="toggle-ai"
+          title="Show / hide AI assistant">🗨 AI</button>
+      </div>
+
+      <!-- Document canvas -->
+      <div id="editor-canvas">
+        <div class="page">
+          <div id="page-backdrop" aria-hidden="true"></div>
+          <div id="editor" contenteditable="true" spellcheck="true">
+            <h1>Welcome to AI Words</h1>
+            <p>Open an <strong>ODT</strong> file, edit it here, and export it when done.
+               Use the assistant on the right to read and edit this document with AI.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Status bar -->
+      <footer class="lo-statusbar">
+        <span id="doc-name">Untitled</span>
+        <span class="lo-sb-sep"></span>
+        <span id="page-count">1 page</span>
+        <span class="lo-sb-sep"></span>
+        <span id="word-count">0 words</span>
+        <span class="lo-sb-spacer"></span>
+        <label class="lo-zoom">
+          <input type="range" id="zoom-range" min="60" max="200" step="10" value="100">
+          <span id="zoom-label">100%</span>
+        </label>
+      </footer>
+    </section>
+
+    <!-- Divider -->
+    <div id="divider"></div>
+
+    <!-- Right: AI assistant -->
+    <section id="ai-pane">
+      <header class="pane-header ai-header">
+        <button data-act="toggle-ai" title="Collapse panel" class="icon-btn">⟩⟩</button>
+        <span class="ai-title">AI Assistant</span>
+        <select id="model-select" title="Active model"></select>
+        <button data-act="add-model" title="Manage models" class="icon-btn" aria-label="Manage models">
+          <svg class="nn-icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+            <g class="nn-edges" stroke="currentColor" stroke-width="1" opacity="0.5">
+              <line x1="5" y1="5" x2="12" y2="9"/><line x1="5" y1="5" x2="12" y2="15"/>
+              <line x1="5" y1="12" x2="12" y2="9"/><line x1="5" y1="12" x2="12" y2="15"/>
+              <line x1="5" y1="19" x2="12" y2="9"/><line x1="5" y1="19" x2="12" y2="15"/>
+              <line x1="12" y1="9" x2="19" y2="12"/><line x1="12" y1="15" x2="19" y2="12"/>
+            </g>
+            <g class="nn-nodes" fill="currentColor">
+              <circle cx="5" cy="5" r="2"/><circle cx="5" cy="12" r="2"/><circle cx="5" cy="19" r="2"/>
+              <circle cx="12" cy="9" r="2"/><circle cx="12" cy="15" r="2"/>
+              <circle cx="19" cy="12" r="2"/>
+            </g>
+          </svg>
+        </button>
+        <button data-act="skills" title="Skills" class="icon-btn">🧩</button>
+      </header>
+
+      <!-- Conversation tabs -->
+      <div class="ai-tabs">
+        <div class="tab-list" id="tab-list"></div>
+        <button id="tab-add" class="tab-add" title="New conversation">＋</button>
+      </div>
+
+      <!-- One messages panel per conversation is injected here -->
+      <div id="tab-panels"></div>
+
+      <div id="composer">
+        <textarea id="chat-input" rows="1"
+          placeholder="Ask about the document, or /help for commands…"></textarea>
+        <button id="send-btn" title="Send">➤</button>
+      </div>
+    </section>
+  </div>
+
+  <!-- Skills panel -->
+  <div id="skills-modal" class="modal" hidden>
+    <div class="modal-box">
+      <div class="modal-head">
+        <h3>Skills</h3>
+        <button data-act="close-skills" class="icon-btn">✕</button>
+      </div>
+      <p class="hint">Loaded skills are injected into the assistant's instructions.</p>
+      <ul id="skills-list"></ul>
+      <div class="skill-new">
+        <input id="skill-name" placeholder="New skill name">
+        <textarea id="skill-body" rows="4" placeholder="Skill instructions…"></textarea>
+        <button data-act="create-skill">Create skill</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add model panel -->
+  <div id="model-modal" class="modal" hidden>
+    <div class="modal-box">
+      <div class="modal-head">
+        <h3>Models</h3>
+        <button data-act="close-model" class="icon-btn">✕</button>
+      </div>
+
+      <ul id="model-list"></ul>
+
+      <h4 class="mf-heading">Add a model</h4>
+      <p class="hint">Connect a Claude (Anthropic) model, a hosted OpenAI-compatible
+        endpoint, or a local server such as Ollama / LM Studio.</p>
+
+      <div class="model-form">
+        <label class="mf-row">
+          <span>API type</span>
+          <select id="mf-api-type">
+            <option value="anthropic">Anthropic (Claude)</option>
+            <option value="openai">OpenAI-compatible</option>
+          </select>
+        </label>
+
+        <label class="mf-row">
+          <span>Provider</span>
+          <input id="mf-provider" placeholder="e.g. Qwen, Ollama, DeepSeek">
+        </label>
+
+        <label class="mf-row">
+          <span>Display name</span>
+          <input id="mf-label" placeholder="e.g. Claude Opus 4.8 (API)">
+        </label>
+
+        <label class="mf-row">
+          <span>Model ID</span>
+          <input id="mf-model" placeholder="e.g. claude-opus-4-8">
+        </label>
+
+        <label class="mf-row" id="mf-baseurl-row">
+          <span>API endpoint</span>
+          <input id="mf-base-url" placeholder="https://api.openai.com/v1">
+        </label>
+
+        <label class="mf-row">
+          <span>API key</span>
+          <input id="mf-api-key" type="password" placeholder="Paste a key, or use an env var below">
+        </label>
+
+        <label class="mf-row">
+          <span>…or key env var</span>
+          <input id="mf-api-key-env" placeholder="e.g. ANTHROPIC_API_KEY">
+        </label>
+
+        <details class="mf-adv">
+          <summary>Advanced</summary>
+          <label class="mf-row">
+            <span>Internal ID</span>
+            <input id="mf-id" placeholder="auto from name if left blank">
+          </label>
+        </details>
+
+        <p class="hint" id="mf-error" hidden></p>
+        <button data-act="create-model" id="mf-submit">Add model</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

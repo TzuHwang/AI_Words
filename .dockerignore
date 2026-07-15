@@ -1,0 +1,23 @@
+# VCS / tooling
+.git
+.gitignore
+.dockerignore
+Dockerfile
+
+# Python caches / build artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# Local runtime state (regenerated on first run)
+config.json
+
+# Editor / OS cruft
+.vscode/
+.idea/
+.DS_Store

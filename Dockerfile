@@ -1,0 +1,77 @@
+# syntax=docker/dockerfile:1
+
+# ---------------------------------------------------------------------------
+# Builder — resolve and install dependencies into a dedicated virtualenv
+# ---------------------------------------------------------------------------
+FROM python:3.14-slim AS builder
+
+ENV POETRY_VERSION=2.0.1 \
+    POETRY_NO_INTERACTION=1 \
+    POETRY_VIRTUALENVS_CREATE=false \
+    PIP_NO_CACHE_DIR=1
+
+# curl is needed by the Poetry installer; ca-certificates for HTTPS.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# 1. Set up the project virtualenv and put it first on PATH so 'python'/'pip'
+#    resolve to it — Poetry (with virtualenvs.create=false) installs into it.
+ENV VIRTUAL_ENV=/venv/default
+RUN python3 -m venv $VIRTUAL_ENV
+ENV PATH="$VIRTUAL_ENV/bin:/root/.local/bin:$PATH"
+
+# 2. Install Poetry via the official installer (isolated in /root/.local),
+#    pinned to a specific version.
+RUN curl -sSL https://install.python-poetry.org | python3 - --version $POETRY_VERSION
+
+WORKDIR /app
+
+# Dependencies first (cached across source edits).
+COPY pyproject.toml poetry.lock* ./
+RUN poetry install --only main --no-root
+
+# Then the app package itself.
+COPY app ./app
+COPY README.md ./
+RUN poetry install --only main
+
+# ---------------------------------------------------------------------------
+# Runtime — slim image containing just the venv and the app
+# ---------------------------------------------------------------------------
+FROM python:3.14-slim AS runtime
+
+# Persist mutable state (config + skills) under /data so a single mounted volume
+# survives restarts without shadowing the app code in /app.
+ENV PYTHONUNBUFFERED=1 \
+    VIRTUAL_ENV=/venv/default \
+    PATH="/venv/default/bin:$PATH" \
+    AI_WORDS_CONFIG=/data/config.json \
+    AI_WORDS_SKILLS=/data/skills
+
+# --- Optional: LibreOffice for higher-fidelity ODT import/export (~1GB).
+#     The app works without it via a pure-Python (odfpy) fallback, so it is
+#     left out by default. Uncomment to enable higher-fidelity conversion:
+# RUN apt-get update \
+#     && apt-get install -y --no-install-recommends libreoffice-writer \
+#     && rm -rf /var/lib/apt/lists/*
+
+RUN useradd --create-home --uid 1000 appuser \
+    && mkdir -p /app /data/skills \
+    && chown -R appuser:appuser /app /data
+WORKDIR /app
+
+COPY --chown=appuser:appuser --from=builder /venv/default /venv/default
+COPY --chown=appuser:appuser --from=builder /app/app ./app
+# Seed the default skills into /data so a fresh named volume is populated with
+# them on first mount (Docker copies image contents into empty named volumes).
+COPY --chown=appuser:appuser skills /data/skills
+
+USER appuser
+
+EXPOSE 8765
+VOLUME ["/data"]
+
+# Bind to all interfaces so the container is reachable from the host; a browser
+# can't be opened from inside a container, so disable that.
+CMD ["python", "-m", "app", "--host", "0.0.0.0", "--no-browser"]
