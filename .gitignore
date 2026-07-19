@@ -10,9 +10,13 @@ __pycache__/
 .venv/
 venv/
 env/
+.pytest_cache/
 
 # OS / editor
 .DS_Store
 Thumbs.db
 .vscode/
 .idea/
+
+# claude
+*CLAUDE*

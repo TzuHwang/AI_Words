@@ -37,6 +37,18 @@ COPY README.md ./
 RUN poetry install --only main
 
 # ---------------------------------------------------------------------------
+# Test — dev dependencies + test suite, layered on the builder. Not part of the
+# runtime image. Build/run with:
+#   docker build --target test -t ai-words-test .
+#   docker run --rm ai-words-test
+# ---------------------------------------------------------------------------
+FROM builder AS test
+# Add the dev group (pytest) on top of the main deps already installed.
+RUN poetry install --with dev
+COPY tests ./tests
+CMD ["python", "-m", "pytest", "-q"]
+
+# ---------------------------------------------------------------------------
 # Runtime — slim image containing just the venv and the app
 # ---------------------------------------------------------------------------
 FROM python:3.14-slim AS runtime

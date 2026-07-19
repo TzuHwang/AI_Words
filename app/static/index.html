@@ -20,6 +20,8 @@
             <button data-act="new">New</button>
             <button data-act="open">Open…</button>
             <div class="lo-menu-sep"></div>
+            <button data-act="save">Save <span class="lo-menu-key">Ctrl+S</span></button>
+            <div class="lo-menu-sep"></div>
             <button data-act="save-odt">Export as ODT</button>
             <button data-act="save-html">Export as HTML</button>
           </div>
@@ -84,6 +86,7 @@
         <div class="lo-dropdown">
           <button class="lo-tb-btn" data-act="save-menu" title="Save / Export">💾 ▾</button>
           <div class="lo-menu-list" id="save-menu">
+            <button data-act="save">Save to file <span class="lo-menu-key">Ctrl+S</span></button>
             <button data-act="save-odt">Export as ODT</button>
             <button data-act="save-html">Export as HTML</button>
           </div>
@@ -163,12 +166,14 @@
 
       <!-- Document canvas -->
       <div id="editor-canvas">
-        <div class="page">
-          <div id="page-backdrop" aria-hidden="true"></div>
-          <div id="editor" contenteditable="true" spellcheck="true">
-            <h1>Welcome to AI Words</h1>
-            <p>Open an <strong>ODT</strong> file, edit it here, and export it when done.
-               Use the assistant on the right to read and edit this document with AI.</p>
+        <div id="page-wrap">
+          <div class="page">
+            <div id="page-backdrop" aria-hidden="true"></div>
+            <div id="editor" contenteditable="true" spellcheck="true">
+              <h1>Welcome to AI Words</h1>
+              <p>Open an <strong>ODT</strong> file, edit it here, and export it when done.
+                 Use the assistant on the right to read and edit this document with AI.</p>
+            </div>
           </div>
         </div>
       </div>
@@ -182,7 +187,7 @@
         <span id="word-count">0 words</span>
         <span class="lo-sb-spacer"></span>
         <label class="lo-zoom">
-          <input type="range" id="zoom-range" min="60" max="200" step="10" value="100">
+          <input type="range" id="zoom-range" min="20" max="400" step="5" value="100">
           <span id="zoom-label">100%</span>
         </label>
       </footer>
