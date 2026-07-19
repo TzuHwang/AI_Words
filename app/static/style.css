@@ -205,6 +205,9 @@ body {
   padding: 2cm 2.2cm;
   min-height: 29.7cm;
   background: transparent;
+  /* Document default font — matches a font-picker option so text with no
+     explicit font still reflects a real family in the toolbar (like Word). */
+  font-family: "Liberation Serif", "Times New Roman", serif;
 }
 /* Manual page break: a thin dashed rule the user inserts via Insert → Page break. */
 #editor .page-break {
@@ -352,6 +355,11 @@ body {
   width: 38px; height: 38px; border-radius: 10px; font-size: 16px; flex: none;
 }
 #send-btn:disabled { opacity: .5; cursor: default; }
+#stop-btn {
+  background: var(--border); color: var(--text); border: none; cursor: pointer;
+  width: 38px; height: 38px; border-radius: 10px; font-size: 13px; flex: none;
+}
+#stop-btn:hover { filter: brightness(1.15); }
 
 /* Modal */
 .modal { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: flex;

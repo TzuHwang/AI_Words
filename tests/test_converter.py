@@ -71,6 +71,82 @@ def test_roundtrip_table(pure_converter):
     assert "<table>" in back and "A" in back and "B" in back
 
 
+def test_roundtrip_font_family_size_color(pure_converter):
+    # The editor emits font choices as inline CSS on spans / <font> tags. The
+    # localised name (標楷體) is preserved on reopen because it comes from the
+    # Asian font slot, which is what LibreOffice shows for CJK text.
+    html = (
+        '<p><span style="font-family: 標楷體, DFKai-SB, cursive;">楷</span>'
+        '<font style="font-size: 18pt;">big</font>'
+        '<span style="color: rgb(204, 0, 0);">red</span>'
+        '<span style="background-color: rgb(255, 255, 0);">hl</span></p>'
+    )
+    odt = converter.html_to_odt_bytes(html)
+    back = converter.odt_bytes_to_html(odt)
+    assert "標楷體" in back
+    assert "18pt" in back
+    assert "#cc0000" in back
+    assert "#ffff00" in back
+
+
+def test_font_slots_western_and_asian(pure_converter):
+    # LibreOffice renders CJK from the -asian slot (localised name the user
+    # picked) and Latin from the Western slot (the Western alias).
+    import zipfile
+    import io
+
+    html = '<p><span style="font-family: 新細明體, PMingLiU, serif;">測試</span></p>'
+    odt = converter.html_to_odt_bytes(html)
+    content = zipfile.ZipFile(io.BytesIO(odt)).read("content.xml").decode("utf-8")
+    assert 'style:font-name-asian="新細明體"' in content
+    assert 'style:font-name="PMingLiU"' in content
+
+
+def test_import_paragraph_style_font(pure_converter):
+    # A real ODT often sets the font on the paragraph style, not on runs. Import
+    # must still carry that font onto the text so the editor reflects it.
+    from odf.opendocument import OpenDocumentText
+    from odf.style import Style, TextProperties
+    from odf.text import P
+
+    doc = OpenDocumentText()
+    pstyle = Style(name="P1", family="paragraph")
+    pstyle.addElement(TextProperties(fontnameasian="新細明體", fontname="PMingLiU"))
+    doc.automaticstyles.addElement(pstyle)
+    doc.text.addElement(P(stylename=pstyle, text="內文"))
+
+    import tempfile
+    import os
+
+    buf = tempfile.NamedTemporaryFile(suffix=".odt", delete=False)
+    buf.close()
+    doc.save(buf.name)
+    data = open(buf.name, "rb").read()
+    os.unlink(buf.name)
+
+    html = converter.odt_bytes_to_html(data)
+    assert "font-family: 新細明體" in html
+
+
+def test_primary_font_prefers_western_name():
+    assert converter._primary_font(["新細明體", "PMingLiU", "serif"]) == "PMingLiU"
+    assert converter._primary_font(["Arial", "sans-serif"]) == "Arial"
+    assert converter._primary_font(["標楷體"]) == "標楷體"  # no Western alias to prefer
+
+
+def test_css_bold_italic_underline_export(pure_converter):
+    # styleWithCSS renders bold/italic/underline as inline styles, not <b>/<i>.
+    html = (
+        '<p><span style="font-weight: bold;">b</span>'
+        '<span style="font-style: italic;">i</span>'
+        '<span style="text-decoration: underline;">u</span></p>'
+    )
+    back = converter.odt_bytes_to_html(converter.html_to_odt_bytes(html))
+    assert "<strong>b</strong>" in back
+    assert "<em>i</em>" in back
+    assert "<u>u</u>" in back
+
+
 def test_html_escaping_roundtrip(pure_converter):
     odt = converter.html_to_odt_bytes("<p>a &lt; b &amp; c</p>")
     back = converter.odt_bytes_to_html(odt)
