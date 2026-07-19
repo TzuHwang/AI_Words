@@ -17,8 +17,12 @@ anthropic = ">=0.40"
 truststore = ">=0.9"  # trust the OS certificate store (corporate proxy / MITM CA)
 
 [tool.poetry.group.dev.dependencies]
-# Add dev-only tools here, e.g. pytest / ruff. Installed with `poetry install`,
-# excluded from the Docker image (which uses `poetry install --only main`).
+# Dev-only tools. Installed with `poetry install`, excluded from the Docker
+# image (which uses `poetry install --only main`).
+pytest = ">=8.0"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
 
 [tool.poetry.scripts]
 ai-words = "app.__main__:main"
