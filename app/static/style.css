@@ -107,6 +107,16 @@ body {
 }
 .lo-menu-list button:hover { background: var(--lo-hover); }
 .lo-menu-sep { height: 1px; background: var(--lo-chrome-border); margin: 4px 6px; }
+.lo-menu-key { float: right; margin-left: 24px; color: var(--text-dim); font-size: 12px; }
+
+/* Transient save confirmation toast */
+#toast {
+  position: fixed; bottom: 44px; left: 50%; transform: translateX(-50%) translateY(8px);
+  background: var(--accent); color: var(--accent-fg); padding: 7px 16px; border-radius: 8px;
+  font-size: 13px; box-shadow: 0 4px 16px rgba(0,0,0,.25); z-index: 100;
+  opacity: 0; pointer-events: none; transition: opacity .15s, transform .15s;
+}
+#toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 
 /* ===================================================================== */
 /* Formatting toolbar                                                    */
@@ -158,8 +168,16 @@ body {
 /* ===================================================================== */
 #editor-canvas {
   flex: 1; overflow: auto; background: var(--lo-canvas);
-  padding: 24px 24px 48px; display: flex; justify-content: center;
+  padding: 24px 24px 48px;
 }
+/* The page is always laid out at its true A4 width, so the text-to-paper ratio
+   never depends on the pane width: when the canvas is too narrow for the sheet
+   it scrolls rather than reflowing. Zoom is a transform on .page, which has no
+   layout size, so #page-wrap is sized by setZoom() to the scaled footprint and
+   gives the canvas its scroll area. `margin: 0 auto` centres the page while it
+   fits and pins it flush left once it doesn't — flex centring would instead
+   push the left edge into unreachable negative scroll space. */
+#page-wrap { margin: 0 auto; width: 21cm; }
 /* A4 = 21cm × 29.7cm. Layout: a relatively-positioned .page holds two layers —
    #page-backdrop paints the real page sheets (one absolutely-positioned .sheet
    per page, sized by paginate() in app.js), and #editor holds the transparent
@@ -167,8 +185,8 @@ body {
    inside a sheet, never on the gutter between sheets. */
 .page {
   position: relative;
-  width: 21cm; max-width: 100%;
-  transform-origin: top center;
+  width: 21cm;
+  transform-origin: top left;
 }
 #page-backdrop {
   position: absolute; inset: 0; z-index: 0; pointer-events: none;

@@ -10,6 +10,12 @@ const docNameEl = $("#doc-name");
 let docName = "Untitled";
 let streaming = false;
 
+// A writable handle to the file the document was opened from, when the File
+// System Access API is available. Ctrl+S writes straight back to it; otherwise
+// it's null and saving falls back to a Save-As picker or a download.
+let fileHandle = null;
+const supportsFsa = "showOpenFilePicker" in window;
+
 // ---------------------------------------------------------------------------
 // In-page dialogs — native alert/confirm/prompt are blocked in embedded
 // webviews (e.g. VS Code's Simple Browser), where calling them freezes the
@@ -142,7 +148,8 @@ document.addEventListener("click", (e) => {
   const act = e.target.closest("[data-act]")?.dataset.act;
   if (!act) { closeMenus(); return; }
   switch (act) {
-    case "open": $("#file-input").click(); break;
+    case "open": openDoc(); break;
+    case "save": saveToFile(); break;
     case "save-menu": {
       const menu = $("#save-menu");
       const open = menu.classList.contains("open");
@@ -191,36 +198,78 @@ async function insertLink() {
   if (url) exec("createLink", url);
 }
 
+// Send a File's bytes through the server converter and load the result.
+async function importFile(file) {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch("/api/import", { method: "POST", body: form });
+  if (!res.ok) throw new Error((await res.json()).detail || res.statusText);
+  const data = await res.json();
+  editor.innerHTML = data.html || "<p><br></p>";
+  docName = file.name.replace(/\.[^.]+$/, "");
+  docNameEl.textContent = data.filename || docName;
+  updateWordCount();
+  schedulePaginate();
+}
+
+// Open a document. Prefer the File System Access API so a later Ctrl+S can write
+// straight back to the same file; fall back to a plain upload where it's absent
+// (in that case there's no handle, so Ctrl+S will prompt for a Save-As target).
+async function openDoc() {
+  if (!supportsFsa) { $("#file-input").click(); return; }
+  let handle;
+  try {
+    [handle] = await window.showOpenFilePicker({
+      types: [{
+        description: "Documents",
+        accept: {
+          "application/vnd.oasis.opendocument.text": [".odt"],
+          "text/html": [".html", ".htm"],
+        },
+      }],
+    });
+  } catch (err) {
+    if (err.name === "AbortError") return;  // user dismissed the picker
+    await uiAlert("Open failed: " + err.message);
+    return;
+  }
+  try {
+    await importFile(await handle.getFile());
+    fileHandle = handle;
+  } catch (err) {
+    await uiAlert("Import failed: " + err.message);
+  }
+}
+
+// <input type=file> path — the fallback opener when the File System Access API
+// is unavailable. It yields no writable handle, so Ctrl+S will Save-As.
 $("#file-input").addEventListener("change", async (e) => {
   const file = e.target.files[0];
   if (!file) return;
-  const form = new FormData();
-  form.append("file", file);
   try {
-    const res = await fetch("/api/import", { method: "POST", body: form });
-    if (!res.ok) throw new Error((await res.json()).detail || res.statusText);
-    const data = await res.json();
-    editor.innerHTML = data.html || "<p><br></p>";
-    docName = file.name.replace(/\.[^.]+$/, "");
-    docNameEl.textContent = data.filename || docName;
-    updateWordCount();
-    schedulePaginate();
+    fileHandle = null;
+    await importFile(file);
   } catch (err) {
     await uiAlert("Import failed: " + err.message);
   }
   e.target.value = "";
 });
 
+// Serialize the current document to ODT/HTML bytes on the server.
+async function buildExportBlob(fmt) {
+  const res = await fetch("/api/export", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ html: cleanDocHtml(), format: fmt, filename: docName }),
+  });
+  if (!res.ok) throw new Error(res.statusText);
+  return res.blob();
+}
+
 async function exportDoc(fmt) {
   closeMenus();
   try {
-    const res = await fetch("/api/export", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ html: cleanDocHtml(), format: fmt, filename: docName }),
-    });
-    if (!res.ok) throw new Error(res.statusText);
-    const blob = await res.blob();
+    const blob = await buildExportBlob(fmt);
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -232,11 +281,69 @@ async function exportDoc(fmt) {
   }
 }
 
+async function writeBlobToHandle(handle, blob) {
+  const writable = await handle.createWritable();
+  await writable.write(blob);
+  await writable.close();
+}
+
+// Ctrl+S — write the document back to its original file in place. If it was
+// opened without a writable handle (no File System Access API, or a brand-new
+// document), prompt once for a Save-As target and remember it; if even that is
+// unavailable, fall back to a plain download.
+async function saveToFile() {
+  closeMenus();
+  try {
+    if (fileHandle) {
+      const ext = (fileHandle.name.match(/\.([^.]+)$/)?.[1] || "").toLowerCase();
+      const fmt = ext === "html" || ext === "htm" ? "html" : "odt";
+      await writeBlobToHandle(fileHandle, await buildExportBlob(fmt));
+      toast(`Saved ${fileHandle.name}`);
+      return;
+    }
+    if (supportsFsa && window.showSaveFilePicker) {
+      const handle = await window.showSaveFilePicker({
+        suggestedName: `${docName}.odt`,
+        types: [{
+          description: "OpenDocument Text",
+          accept: { "application/vnd.oasis.opendocument.text": [".odt"] },
+        }],
+      });
+      await writeBlobToHandle(handle, await buildExportBlob("odt"));
+      fileHandle = handle;
+      docName = handle.name.replace(/\.[^.]+$/, "");
+      docNameEl.textContent = handle.name;
+      toast(`Saved ${handle.name}`);
+      return;
+    }
+    await exportDoc("odt");   // last resort: download a copy
+  } catch (err) {
+    if (err.name === "AbortError") return;  // user cancelled the Save-As dialog
+    await uiAlert("Save failed: " + err.message);
+  }
+}
+
+// A brief status-bar-style flash, e.g. after a save.
+let toastTimer = 0;
+function toast(msg) {
+  let el = $("#toast");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "toast";
+    document.body.appendChild(el);
+  }
+  el.textContent = msg;
+  el.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove("show"), 1600);
+}
+
 async function newDoc() {
   if (editor.textContent.trim() && !(await uiConfirm("Start a new document? Unsaved changes will be lost."))) return;
   editor.innerHTML = "<h1>Untitled</h1><p><br></p>";
   docName = "Untitled";
   docNameEl.textContent = docName;
+  fileHandle = null;   // no longer tied to the previously opened file
   updateWordCount();
   schedulePaginate();
 }
@@ -249,6 +356,107 @@ function updateWordCount() {
   $("#word-count").textContent = words === 1 ? "1 word" : `${words} words`;
 }
 editor.addEventListener("input", updateWordCount);
+
+// ---------------------------------------------------------------------------
+// View — zoom and scroll anchoring
+//
+// The page always occupies its true A4 layout width and zoom is only a CSS
+// transform on top of it, so the text never reflows to fit the pane: a narrow
+// pane scrolls over a full-size page instead of squashing it. A transform has
+// no layout size, so #page-wrap is kept at the scaled footprint to give the
+// canvas a scroll area that matches what's on screen.
+//
+// Zooming and resizing the pane both hold the *focal point* still: the point of
+// the document under the mouse when it's over the canvas, otherwise the point at
+// the canvas's centre. A resize is only observable after it has happened, so the
+// anchor is captured continuously rather than measured on the way in.
+// ---------------------------------------------------------------------------
+const canvas = $("#editor-canvas");
+const pageEl = document.querySelector(".page");
+const pageWrap = $("#page-wrap");
+const zoomRange = $("#zoom-range");
+const ZOOM_MIN = 0.2, ZOOM_MAX = 4;
+let zoom = 1;
+
+let pointer = null; // last mouse position over the canvas; null while outside
+
+function focalPoint() {
+  const r = canvas.getBoundingClientRect();
+  if (pointer &&
+      pointer.x >= r.left && pointer.x <= r.right &&
+      pointer.y >= r.top && pointer.y <= r.bottom) {
+    return { x: pointer.x - r.left, y: pointer.y - r.top };
+  }
+  return { x: r.width / 2, y: r.height / 2 };
+}
+
+// The page's box in the canvas's scrollable content coordinates.
+function pageBox() {
+  const c = canvas.getBoundingClientRect();
+  const w = pageWrap.getBoundingClientRect();
+  return {
+    x: w.left - c.left + canvas.scrollLeft,
+    y: w.top - c.top + canvas.scrollTop,
+    w: w.width || 1,
+    h: w.height || 1,
+  };
+}
+
+// Where the focal point lands on the page, as a fraction of the page box —
+// a scale-independent handle on "the spot the user is looking at".
+let anchor = { rx: 0.5, ry: 0 };
+function captureAnchor() {
+  const f = focalPoint(), b = pageBox();
+  anchor = {
+    rx: (canvas.scrollLeft + f.x - b.x) / b.w,
+    ry: (canvas.scrollTop + f.y - b.y) / b.h,
+  };
+}
+// Scroll that spot back under the focal point. Re-reading focalPoint() here is
+// what makes a resize zoom about the *new* centre rather than the old one.
+function restoreAnchor() {
+  const f = focalPoint(), b = pageBox();
+  canvas.scrollLeft = b.x + anchor.rx * b.w - f.x;
+  canvas.scrollTop = b.y + anchor.ry * b.h - f.y;
+}
+// Anything that moves the focal point re-captures, so the stored fraction always
+// describes the spot under the *current* focal point — including the handover
+// when the mouse leaves and the centre takes over. Capturing against one focal
+// point and restoring against another would shove that spot across the canvas.
+canvas.addEventListener("scroll", captureAnchor, { passive: true });
+canvas.addEventListener("pointermove", (e) => {
+  pointer = { x: e.clientX, y: e.clientY };
+  captureAnchor();
+});
+canvas.addEventListener("pointerleave", () => { pointer = null; captureAnchor(); });
+
+function sizePageWrap() {
+  pageWrap.style.width = pageEl.offsetWidth * zoom + "px";
+  pageWrap.style.height = pageEl.offsetHeight * zoom + "px";
+}
+
+function setZoom(z) {
+  z = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z));
+  captureAnchor();
+  zoom = z;
+  pageEl.style.transform = `scale(${z})`;
+  sizePageWrap();
+  const pct = Math.round(z * 100);
+  zoomRange.value = pct;
+  $("#zoom-label").textContent = pct + "%";
+  restoreAnchor();
+}
+
+zoomRange.addEventListener("input", (e) => setZoom(Number(e.target.value) / 100));
+canvas.addEventListener("wheel", (e) => {
+  if (!e.ctrlKey && !e.metaKey) return;
+  e.preventDefault();
+  setZoom(zoom * Math.exp(-e.deltaY / 400));
+}, { passive: false });
+
+// Resizing the pane (dragging the divider, collapsing the AI panel, resizing the
+// window) keeps the anchored spot in place instead of letting the page drift.
+new ResizeObserver(() => { restoreAnchor(); }).observe(canvas);
 
 // ---------------------------------------------------------------------------
 // Pagination — flow the document across real A4 sheets (Office-style)
@@ -347,6 +555,7 @@ function paginate() {
   for (let p = 0; p < nPages; p++) rects.push({ top: Y[p], height: sheetH[p] });
   editor.style.minHeight = (Y[nPages - 1] + sheetH[nPages - 1]) + "px";
   renderSheets(rects);
+  sizePageWrap();   // the page just changed height; the scroll area must follow
   const pc = $("#page-count");
   if (pc) pc.textContent = nPages === 1 ? "1 page" : `${nPages} pages`;
 }
@@ -404,12 +613,6 @@ window.addEventListener("resize", schedulePaginate);
 // Re-flow once late-loading fonts settle (they change block heights).
 window.addEventListener("load", schedulePaginate);
 if (document.fonts?.ready) document.fonts.ready.then(schedulePaginate);
-
-$("#zoom-range").addEventListener("input", (e) => {
-  const z = e.target.value;
-  $("#zoom-label").textContent = z + "%";
-  document.querySelector(".page").style.transform = `scale(${z / 100})`;
-});
 
 // ---------------------------------------------------------------------------
 // AI pane: show / hide + draggable resize
@@ -981,6 +1184,26 @@ function escapeHtml(s) {
   return String(s)
     .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
+
+// ---------------------------------------------------------------------------
+// Keyboard shortcuts
+// ---------------------------------------------------------------------------
+// Ctrl/Cmd+S saves in place instead of triggering the browser's Save-Page.
+window.addEventListener("keydown", (e) => {
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === "s" || e.key === "S")) {
+    e.preventDefault();
+    saveToFile();
+  }
+});
+
+// Tab inserts one full-width space (U+3000) — exactly one CJK character wide —
+// rather than moving focus out of the editor. execCommand keeps it undoable.
+editor.addEventListener("keydown", (e) => {
+  if (e.key === "Tab" && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    e.preventDefault();
+    document.execCommand("insertText", false, "　");
+  }
+});
 
 // ---------------------------------------------------------------------------
 // Init
