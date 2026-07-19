@@ -4,11 +4,13 @@ const $ = (sel) => document.querySelector(sel);
 const editor = $("#editor");
 const chatInput = $("#chat-input");
 const sendBtn = $("#send-btn");
+const stopBtn = $("#stop-btn");
 const modelSelect = $("#model-select");
 const docNameEl = $("#doc-name");
 
 let docName = "Untitled";
 let streaming = false;
+let streamAbort = null; // AbortController for the in-flight chat request
 
 // A writable handle to the file the document was opened from, when the File
 // System Access API is available. Ctrl+S writes straight back to it; otherwise
@@ -97,9 +99,60 @@ $("#style-select").addEventListener("change", (e) => {
 });
 
 // Font family
-$("#font-select").addEventListener("change", (e) => {
+const fontSelect = $("#font-select");
+fontSelect.addEventListener("change", (e) => {
   exec("fontName", e.target.value);
 });
+
+// Reflect the selection's font in the dropdown: show the matching family when
+// the selection is all one font, blank when it spans several (Office-style).
+// Keyed on the *primary* (first) family name, normalised, so a reopened doc's
+// single "新細明體" matches the dropdown's "新細明體, PMingLiU, serif" option.
+const primaryFamily = (ff) =>
+  (ff.split(",")[0] || "").trim().replace(/^["']|["']$/g, "").toLowerCase();
+const fontKeyToValue = new Map();
+Array.from(fontSelect.options).forEach((o) => {
+  if (o.value) fontKeyToValue.set(primaryFamily(o.value), o.value);
+});
+
+// The distinct font families across the current selection (or caret), or null
+// when the selection isn't inside the editor.
+function selectionFontKeys() {
+  const sel = window.getSelection();
+  if (!sel || !sel.rangeCount) return null;
+  const range = sel.getRangeAt(0);
+  if (!editor.contains(range.commonAncestorContainer)) return null;
+  const keys = new Set();
+  const addFontOf = (node) => {
+    const el = node.nodeType === 3 ? node.parentElement : node;
+    if (el) keys.add(primaryFamily(getComputedStyle(el).fontFamily));
+  };
+  if (range.collapsed) {
+    addFontOf(range.startContainer);
+  } else {
+    const root = range.commonAncestorContainer;
+    const base = root.nodeType === 3 ? root.parentNode : root;
+    const walker = document.createTreeWalker(base, NodeFilter.SHOW_TEXT, {
+      acceptNode: (n) =>
+        n.nodeValue && n.nodeValue.trim() && range.intersectsNode(n)
+          ? NodeFilter.FILTER_ACCEPT
+          : NodeFilter.FILTER_REJECT,
+    });
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) addFontOf(n);
+  }
+  return [...keys];
+}
+
+function syncFontSelect() {
+  const keys = selectionFontKeys();
+  if (keys === null) return;                       // selection isn't in the editor
+  if (keys.length === 1 && fontKeyToValue.has(keys[0])) {
+    fontSelect.value = fontKeyToValue.get(keys[0]);
+  } else {
+    fontSelect.selectedIndex = -1;                 // blank: mixed or an unlisted font
+  }
+}
+document.addEventListener("selectionchange", syncFontSelect);
 
 // Font size — execCommand only accepts 1–7, so tag then rewrite to pt.
 $("#size-select").addEventListener("change", (e) => {
@@ -929,6 +982,7 @@ chatInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
 });
 sendBtn.addEventListener("click", send);
+stopBtn.addEventListener("click", () => streamAbort?.abort());
 
 async function send() {
   const text = chatInput.value.trim();
@@ -956,7 +1010,9 @@ function fmtSecs(ms) {
 
 async function streamAssistant(session) {
   streaming = true;
-  sendBtn.disabled = true;
+  streamAbort = new AbortController();
+  sendBtn.hidden = true;
+  stopBtn.hidden = false;
   const { bubble, msg } = addMessage("assistant", "", session.el);
   let full = "";
 
@@ -990,6 +1046,7 @@ async function streamAssistant(session) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ messages: session.history, document_html: cleanDocHtml() }),
+      signal: streamAbort.signal,
     });
     if (!res.ok) throw new Error(res.statusText);
     const reader = res.body.getReader();
@@ -1017,10 +1074,22 @@ async function streamAssistant(session) {
     finalizeAssistant(msg, bubble, full, state);
   } catch (err) {
     clearInterval(ticker);
-    bubble.innerHTML = `<span style="color:var(--accent)">Error: ${escapeHtml(err.message)}</span>`;
+    if (err.name === "AbortError") {
+      // Stopped by the user — keep whatever streamed so far.
+      if (full.trim()) {
+        session.history.push({ role: "assistant", content: full });
+        finalizeAssistant(msg, bubble, full, state);
+      } else {
+        bubble.innerHTML = `<span style="color:var(--text-dim)">Stopped.</span>`;
+      }
+    } else {
+      bubble.innerHTML = `<span style="color:var(--accent)">Error: ${escapeHtml(err.message)}</span>`;
+    }
   } finally {
     streaming = false;
-    sendBtn.disabled = false;
+    streamAbort = null;
+    sendBtn.hidden = false;
+    stopBtn.hidden = true;
     session.el.scrollTop = session.el.scrollHeight;
   }
 }

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
@@ -27,7 +28,12 @@ app = FastAPI(title="AI Words")
 # ---------------------------------------------------------------------------
 @app.get("/")
 async def index() -> FileResponse:
-    return FileResponse(STATIC_DIR / "index.html")
+    # Never cache the entry page, so the cache-busting query strings it points
+    # at (e.g. app.js?v=N) are always the current ones after a rebuild.
+    return FileResponse(
+        STATIC_DIR / "index.html",
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -64,10 +70,17 @@ async def export_document(request: Request) -> Response:
         content = html_to_odt_bytes(html)
         media = "application/vnd.oasis.opendocument.text"
         out_name = f"{stem}.odt"
+    # RFC 5987: an ASCII-only `filename` fallback plus a UTF-8 `filename*` so
+    # non-Latin-1 names (e.g. CJK) survive the latin-1 header encoding.
+    ascii_name = out_name.encode("ascii", "replace").decode("ascii")
+    disposition = (
+        f'attachment; filename="{ascii_name}"; '
+        f"filename*=UTF-8''{quote(out_name)}"
+    )
     return Response(
         content=content,
         media_type=media,
-        headers={"Content-Disposition": f'attachment; filename="{out_name}"'},
+        headers={"Content-Disposition": disposition},
     )
 
 
