@@ -67,11 +67,20 @@ normally with NO document block.
 MAX_TOKENS = 16000
 
 
-def build_system_prompt(document_html: str, skill_prompt: str) -> str:
+def build_system_prompt(
+    document_html: str, skill_prompt: str, selection_text: str = ""
+) -> str:
     prompt = SYSTEM_PROMPT
     if skill_prompt.strip():
         prompt += "\n\n# Loaded skills\n" + skill_prompt.strip()
     prompt += f"\n\n<document>\n{document_html}\n</document>"
+    if selection_text.strip():
+        prompt += (
+            "\n\nThe user currently has this text selected in the document. "
+            "Treat it as their likely focus, but if the conversation clearly "
+            "concerns the whole document, use the full <document> instead."
+            f"\n\n<selection>\n{selection_text}\n</selection>"
+        )
     return prompt
 
 
@@ -80,9 +89,10 @@ async def stream_chat(
     messages: list[dict],
     document_html: str,
     skill_prompt: str = "",
+    selection_text: str = "",
 ) -> AsyncIterator[str]:
     """Yield text chunks from the model's streamed response."""
-    system = build_system_prompt(document_html, skill_prompt)
+    system = build_system_prompt(document_html, skill_prompt, selection_text)
     if backend.api_type == "anthropic":
         async for chunk in _stream_anthropic(backend, system, messages):
             yield chunk

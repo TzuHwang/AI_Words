@@ -230,6 +230,12 @@ body {
 #editor table { border-collapse: collapse; }
 #editor td, #editor th { border: 1px solid #9aa1ac; padding: 4px 8px; }
 
+/* Persistent marker for the text the AI chat will treat as focus, kept visible
+   after the native selection is lost to the chat box gaining focus. A faded
+   version of the native selection colour, so it reads as the same selection
+   gone inactive. */
+::highlight(ai-focus) { background: color-mix(in srgb, Highlight 45%, transparent); }
+
 /* ===================================================================== */
 /* Status bar                                                            */
 /* ===================================================================== */

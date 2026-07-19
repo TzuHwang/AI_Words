@@ -154,6 +154,49 @@ function syncFontSelect() {
 }
 document.addEventListener("selectionchange", syncFontSelect);
 
+// Remember the most recent non-empty selection made *inside* the editor, so the
+// AI chat can send it as focus context even after focus moves to the chat box
+// (which would otherwise collapse the document selection). Collapsing the
+// selection inside the editor clears it; selecting elsewhere leaves it untouched.
+let lastDocSelection = "";
+let lastDocRange = null;
+function docSelectionText() {
+  return lastDocSelection;
+}
+
+// A persistent highlight that keeps the AI-focus text visible once the native
+// selection is lost (e.g. when the chat box is focused). Falls back gracefully
+// where the CSS Custom Highlight API is unavailable.
+const focusHighlight = window.Highlight && CSS.highlights ? new Highlight() : null;
+if (focusHighlight) CSS.highlights.set("ai-focus", focusHighlight);
+function showFocusHighlight() {
+  if (!focusHighlight) return;
+  focusHighlight.clear();
+  if (lastDocRange) focusHighlight.add(lastDocRange);
+}
+function clearFocusHighlight() {
+  if (focusHighlight) focusHighlight.clear();
+}
+
+document.addEventListener("selectionchange", () => {
+  const sel = window.getSelection();
+  if (!sel || !sel.rangeCount) return;
+  const range = sel.getRangeAt(0);
+  if (!editor.contains(range.commonAncestorContainer)) return; // e.g. the chat box
+  if (range.collapsed) {
+    lastDocSelection = "";
+    lastDocRange = null;
+  } else {
+    lastDocSelection = sel.toString().trim();
+    lastDocRange = range.cloneRange();
+  }
+  clearFocusHighlight(); // editor is active, so the native selection shows
+});
+// When the editor loses focus, redraw the selection as our own highlight; when
+// it regains focus, hand back to the native selection.
+editor.addEventListener("blur", showFocusHighlight);
+editor.addEventListener("focus", clearFocusHighlight);
+
 // Font size — execCommand only accepts 1–7, so tag then rewrite to pt.
 $("#size-select").addEventListener("change", (e) => {
   const pt = e.target.value;
@@ -1045,7 +1088,11 @@ async function streamAssistant(session) {
     const res = await fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ messages: session.history, document_html: cleanDocHtml() }),
+      body: JSON.stringify({
+        messages: session.history,
+        document_html: cleanDocHtml(),
+        selection_text: docSelectionText(),
+      }),
       signal: streamAbort.signal,
     });
     if (!res.ok) throw new Error(res.statusText);

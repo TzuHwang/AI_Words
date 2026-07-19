@@ -34,6 +34,16 @@ def test_system_prompt_includes_skills_when_present():
     assert "# Loaded skills" in prompt and "Be terse." in prompt
 
 
+def test_system_prompt_embeds_selection_when_present():
+    prompt = ai.build_system_prompt("<p>full</p>", "", "picked words")
+    assert "<selection>" in prompt and "picked words" in prompt
+
+
+def test_system_prompt_omits_selection_when_empty():
+    prompt = ai.build_system_prompt("<p>full</p>", "", "   ")
+    assert "<selection>" not in prompt
+
+
 # -- stream_chat dispatch ---------------------------------------------------
 def test_stream_chat_routes_by_api_type(monkeypatch):
     async def fake_anthropic(backend, system, messages):

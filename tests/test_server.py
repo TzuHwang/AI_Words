@@ -115,7 +115,7 @@ def test_import_rejects_unknown_type(client):
 
 # -- chat (SSE) -------------------------------------------------------------
 def test_chat_streams_sse(client, monkeypatch):
-    async def fake_stream(backend, messages, document_html, skill_prompt):
+    async def fake_stream(backend, messages, document_html, skill_prompt, selection_text):
         yield "Hello "
         yield "world"
 

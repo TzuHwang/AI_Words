@@ -92,6 +92,7 @@ async def chat(request: Request) -> StreamingResponse:
     body = await request.json()
     messages = body.get("messages", [])
     document_html = body.get("document_html", "")
+    selection_text = body.get("selection_text", "")
 
     cfg = load_config()
     backend = cfg.models.get(cfg.active_model)
@@ -102,7 +103,7 @@ async def chat(request: Request) -> StreamingResponse:
     async def event_stream():
         try:
             async for chunk in ai.stream_chat(
-                backend, messages, document_html, skill_prompt
+                backend, messages, document_html, skill_prompt, selection_text
             ):
                 yield f"data: {json.dumps({'delta': chunk})}\n\n"
             yield f"data: {json.dumps({'done': True})}\n\n"
