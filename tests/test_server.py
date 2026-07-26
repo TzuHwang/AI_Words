@@ -46,6 +46,13 @@ def test_latex_render_without_engine(client, monkeypatch):
     assert "No LaTeX engine" in r.json()["error"]
 
 
+def test_latex_render_superseded(client, monkeypatch):
+    # A compile killed by a newer one is not an error: 409, no body.
+    monkeypatch.setattr("app.server.render_tex_to_pdf",
+                        lambda src: (None, "__superseded__"))
+    assert client.post("/api/latex/render", json={"source": "x"}).status_code == 409
+
+
 def test_latex_render_success(client, monkeypatch):
     monkeypatch.setattr("app.server.render_tex_to_pdf", lambda src: (b"%PDF-1.5 fake", "log"))
     r = client.post("/api/latex/render", json={"source": "hi"})

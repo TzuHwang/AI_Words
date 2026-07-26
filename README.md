@@ -22,6 +22,7 @@
 - [Getting Started from Scratch](#getting-started-from-scratch)
 - [Configuring AI Models](#configuring-ai-models)
 - [Usage](#usage)
+- [Running the Tests](#running-the-tests)
 - [Packaging as an Executable](#packaging-as-an-executable)
 - [Roadmap](#roadmap)
 - [License](#license)
@@ -203,6 +204,25 @@ Assistant slash commands:
 | `/skill load <name>` | Load a skill |
 | `/clear` | Clear the conversation |
 
+## Running the Tests
+
+```bash
+poetry install          # includes the dev group (pytest)
+poetry run pytest
+```
+
+The suite stubs out every external tool, so it needs neither an AI key nor LibreOffice nor a LaTeX engine. Two Docker targets run it in a clean environment:
+
+```bash
+# The suite as above, on the project's Python version.
+docker build --target test -t ai-words-test . && docker run --rm ai-words-test
+
+# The same, plus a real LaTeX engine (xelatex + CJK fonts).
+docker build --target test-tex -t ai-words-test-tex . && docker run --rm ai-words-test-tex
+```
+
+`tests/test_latex_engine.py` compiles actual documents — cross references resolving from a reused `.aux`, a broken document reporting its log, a CJK document finding its fonts. Those tests **skip** when no engine is on `PATH`, which is why the `test-tex` target exists; the plain `test` target skips them just like a bare machine does.
+
 ## Packaging as an Executable
 
 The launcher and web UI have no build step, so a single-file executable can be produced with PyInstaller:
@@ -230,3 +250,6 @@ pyinstaller --onefile --add-data "app/static:app/static" --name ai_words run.py
 ## License
 
 See [LICENSE](LICENSE).
+
+`app/static/vendor/` bundles [pdf.js](https://github.com/mozilla/pdf.js) (Mozilla, Apache-2.0),
+which renders the LaTeX PDF preview.

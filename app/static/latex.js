@@ -1,13 +1,13 @@
 "use strict";
 
-// LaTeX editor: a source pane, a server-compiled PDF preview, and an AI
-// assistant. Compilation shells out to a LaTeX engine on the server
-// (/api/latex/render); when none is installed the preview shows a notice and
+// LaTeX editor: a source pane and an AI assistant. Compilation shells out to a
+// LaTeX engine on the server (/api/latex/render) and the resulting PDF is pushed
+// to a separate browser tab (pdfview.html), so it never competes with the source
+// and the chat for width. When no engine is installed the log shows a notice and
 // editing still works.
 
 const $ = (sel) => document.querySelector(sel);
 const source = $("#tex-source");
-const pdfFrame = $("#tex-pdf");
 const logEl = $("#tex-log");
 const statusEl = $("#tex-status");
 const docNameEl = $("#doc-name");
@@ -29,7 +29,9 @@ let docName = "untitled.tex";
 let fileHandle = null;                 // writable handle for Ctrl+S, when available
 const supportsFsa = "showOpenFilePicker" in window;
 let texAvailable = true;               // set from /api/models; gates auto-compile
-let lastPdfUrl = null;                 // object URL currently shown, to revoke
+let lastPdf = null;                    // bytes of the most recent PDF
+let lastSource = null;                 // source that produced it
+let previewWin = null;                 // the viewer tab, while it is open
 let streaming = false;
 let streamAbort = null;
 
@@ -37,51 +39,90 @@ let streamAbort = null;
 // Compile
 // ---------------------------------------------------------------------------
 let compileTimer = 0;
-let compiling = false;
-let recompileQueued = false;
+let compileAbort = null;
+let lastCompileMs = 700;               // measured; drives the debounce below
+
+// Wait about as long as a compile costs: a document that builds in 300ms can
+// preview almost live, while a slow one doesn't get a queue of runs piled on it.
+function debounceMs() {
+  return Math.min(2000, Math.max(400, Math.round(lastCompileMs)));
+}
 
 function scheduleCompile() {
   if (!$("#auto-compile").checked || !texAvailable) return;
+  if (source.value === lastSource) return;    // nothing changed since last compile
   clearTimeout(compileTimer);
-  compileTimer = setTimeout(compile, 1500);   // debounce after typing stops
+  compileTimer = setTimeout(compile, debounceMs());
 }
 
 async function compile() {
   clearTimeout(compileTimer);
-  if (compiling) { recompileQueued = true; return; }  // coalesce overlapping runs
-  compiling = true;
+  compileAbort?.abort();               // drop the in-flight run; the server kills it too
+  const run = (compileAbort = new AbortController());
   setStatus("Compiling…", "");
+  const src = source.value;
+  const started = performance.now();
   try {
     const res = await fetch("/api/latex/render", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ source: source.value }),
+      body: JSON.stringify({ source: src }),
+      signal: run.signal,
     });
+    if (res.status === 409) return;    // superseded by a newer compile
+    lastCompileMs = performance.now() - started;
     if (res.ok) {
-      showPdf(await res.blob());
-      setStatus("Compiled ✓", "ok");
+      lastPdf = await res.arrayBuffer();
+      lastSource = src;
+      pushPdf();
+      logEl.hidden = true;
+      setStatus(previewOpen() ? "Compiled ✓" : "Compiled ✓ — open 🗔 PDF", "ok");
     } else {
       const data = await res.json().catch(() => ({}));
       showLog(data.error || res.statusText, false);
       setStatus("Compile failed", "error");
     }
   } catch (err) {
+    if (err.name === "AbortError") return;   // replaced by a newer compile
     showLog("Request failed: " + err.message, false);
     setStatus("Compile failed", "error");
   } finally {
-    compiling = false;
-    if (recompileQueued) { recompileQueued = false; compile(); }
+    if (compileAbort === run) compileAbort = null;
   }
 }
 
-function showPdf(blob) {
-  if (lastPdfUrl) URL.revokeObjectURL(lastPdfUrl);
-  lastPdfUrl = URL.createObjectURL(blob);
-  pdfFrame.src = lastPdfUrl;
-  logEl.hidden = true;
+function previewOpen() {
+  return !!previewWin && !previewWin.closed;
 }
 
-// Show a message over the preview. `notice` = neutral (e.g. no engine), else error.
+// Hand the PDF to the viewer tab, which redraws in place without a reload. The
+// buffer is detached by the transfer, so a copy is sent and `lastPdf` is kept
+// for the next viewer that asks for it.
+function pushPdf() {
+  if (!previewOpen() || !lastPdf) return;
+  const copy = lastPdf.slice(0);
+  previewWin.postMessage(
+    { from: "aiwords", type: "pdf", name: docName, data: copy },
+    location.origin, [copy]);
+}
+
+// Open (or re-focus) the viewer tab. window.open must run inside the click that
+// asked for it, so this is never called from the auto-compile path — those
+// compiles only push to a tab that is already open. An open tab is never
+// navigated again: reloading it would throw away its scroll position and zoom.
+function openPreview() {
+  if (previewOpen()) { previewWin.focus(); return; }
+  previewWin = window.open("/static/pdfview.html", "aiwords-pdf");
+  if (!previewWin) setStatus("Preview blocked — allow pop-ups", "error");
+}
+
+// The viewer asks for the current PDF once it has booted.
+window.addEventListener("message", (e) => {
+  if (e.origin !== location.origin) return;
+  if (e.data?.from === "aiwords-pdfview" && e.data.type === "ready") pushPdf();
+});
+
+// Show a message under the source. `notice` = neutral (e.g. no engine), else error.
 function showLog(text, notice) {
   logEl.textContent = text;
   logEl.classList.toggle("notice", !!notice);
@@ -104,7 +145,11 @@ $("#auto-compile").addEventListener("change", () => {
 document.addEventListener("click", (e) => {
   const act = e.target.closest("[data-act]")?.dataset.act;
   switch (act) {
-    case "compile": compile(); break;
+    case "compile": openPreview(); compile(); break;
+    case "preview":
+      openPreview();
+      if (!lastPdf && texAvailable) compile();
+      break;
     case "new": newDoc(); break;
     case "open": openDoc(); break;
     case "save": saveToFile(); break;
@@ -205,14 +250,49 @@ window.addEventListener("keydown", (e) => {
 });
 
 // ---------------------------------------------------------------------------
-// AI pane: collapse toggle
+// AI pane: show / hide + draggable resize
+//
+// Deliberately the same behaviour and the same numbers as the ODT editor's pane
+// in app.js: same starting width, same clamps, same divider. The two pages share
+// their markup and CSS for this, but not their scripts, so the handlers are
+// spelled out in both.
 // ---------------------------------------------------------------------------
 const aiPane = $("#ai-pane");
+const divider = $("#divider");
+let aiWidth = 420; // remembered width so re-opening restores the last size
+
 function toggleAI() {
   const collapsed = !aiPane.classList.contains("collapsed");
+  if (collapsed) aiWidth = aiPane.getBoundingClientRect().width || aiWidth;
   aiPane.classList.toggle("collapsed", collapsed);
+  divider.classList.toggle("collapsed", collapsed);
   $("#toggle-ai").classList.toggle("active", !collapsed);
+  if (!collapsed) aiPane.style.flex = `0 0 ${aiWidth}px`;
 }
+
+let dragging = false;
+divider.addEventListener("mousedown", (e) => {
+  dragging = true;
+  divider.classList.add("dragging");
+  document.body.style.cursor = "col-resize";
+  document.body.style.userSelect = "none";
+  e.preventDefault();
+});
+window.addEventListener("mousemove", (e) => {
+  if (!dragging) return;
+  const main = $(".tex-main").getBoundingClientRect();
+  let w = main.right - e.clientX;
+  w = Math.max(300, Math.min(w, main.width - 380)); // clamp both panes
+  aiWidth = w;
+  aiPane.style.flex = `0 0 ${w}px`;
+});
+window.addEventListener("mouseup", () => {
+  if (!dragging) return;
+  dragging = false;
+  divider.classList.remove("dragging");
+  document.body.style.cursor = "";
+  document.body.style.userSelect = "";
+});
 
 // ---------------------------------------------------------------------------
 // Models

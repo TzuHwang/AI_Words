@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI Words — PDF</title>
+  <link rel="stylesheet" href="/static/style.css?v=3">
+  <link rel="stylesheet" href="/static/pdfview.css?v=1">
+</head>
+<body>
+  <div id="pv-app">
+    <div class="pv-bar">
+      <button class="pv-btn" data-act="zoom-out" title="Zoom out">−</button>
+      <span id="pv-zoom" class="pv-zoom">100%</span>
+      <button class="pv-btn" data-act="zoom-in" title="Zoom in">＋</button>
+      <button class="pv-btn" data-act="fit" id="pv-fit" title="Fit page width">Fit width</button>
+      <span class="pv-spacer"></span>
+      <span id="pv-name" class="pv-name"></span>
+      <span id="pv-stamp" class="pv-stamp"></span>
+    </div>
+
+    <div id="pv-pages" class="pv-pages">
+      <p id="pv-empty" class="pv-empty">Waiting for the first compile…</p>
+    </div>
+  </div>
+
+  <script type="module" src="/static/pdfview.js?v=1"></script>
+</body>
+</html>

@@ -6,6 +6,7 @@ AI chat (streaming), model switching, and skill management.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from urllib.parse import quote
@@ -17,7 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from . import ai, skills
 from .config import ModelBackend, load_config, save_config
 from .converter import find_soffice, html_to_odt_bytes, odt_bytes_to_html
-from .latex import find_tex, render_tex_to_pdf
+from .latex import SUPERSEDED, find_tex, render_tex_to_pdf
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -106,7 +107,13 @@ async def export_document(request: Request) -> Response:
 async def latex_render(request: Request) -> Response:
     body = await request.json()
     source = body.get("source", "")
-    pdf, log = render_tex_to_pdf(source)
+    # Shelling out to a LaTeX engine takes seconds; keep it off the event loop
+    # so it can't stall the chat stream or the next compile request.
+    pdf, log = await asyncio.to_thread(render_tex_to_pdf, source)
+    if log == SUPERSEDED:
+        # A newer compile replaced this one mid-run — not an error, and the
+        # browser has already moved on to that one's response.
+        return Response(status_code=409)
     if pdf is None:
         # 422: the request was well-formed but the source didn't compile (or no
         # engine is installed). The log is returned for the UI to display.

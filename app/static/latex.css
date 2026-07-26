@@ -1,5 +1,6 @@
 /* LaTeX editor page. The AI pane (#ai-pane, .messages, #composer, .msg…) reuses
-   the shared styles in style.css; only the source/preview layout lives here. */
+   the shared styles in style.css; only the source/log layout lives here. The
+   compiled PDF is shown in its own browser tab, not on this page. */
 
 #tex-app { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
 
@@ -32,7 +33,9 @@
 /* Main split ------------------------------------------------------------- */
 .tex-main { flex: 1; display: flex; min-height: 0; overflow: hidden; }
 
-.tex-editor { flex: 1 1 50%; min-width: 260px; display: flex; }
+/* min-width matches #editor-pane's in style.css: it is what the divider drag
+   clamps against, so both editors stop shrinking at the same place. */
+.tex-editor { flex: 1; min-width: 360px; min-height: 0; display: flex; flex-direction: column; }
 #tex-source {
   flex: 1; width: 100%; resize: none; border: 0; outline: none;
   padding: 14px 16px;
@@ -41,17 +44,9 @@
   tab-size: 2;
 }
 
-.tex-vdiv { flex: none; width: 5px; background: var(--border); }
-
-.tex-preview {
-  flex: 1 1 50%; min-width: 260px; position: relative;
-  background: var(--lo-canvas); display: flex;
-}
-#tex-pdf { flex: 1; width: 100%; height: 100%; border: 0; background: var(--lo-canvas); }
-
-/* Compile log overlays the preview when a compile fails / a notice is shown. */
+/* Compile log sits under the source when a compile fails / a notice is shown. */
 .tex-log {
-  position: absolute; inset: 0; margin: 0; padding: 16px 18px;
+  flex: none; max-height: 35%; margin: 0; padding: 12px 16px;
   overflow: auto; white-space: pre-wrap; word-break: break-word;
   font: 12.5px/1.5 "SFMono-Regular", Consolas, monospace;
   color: var(--text); background: var(--bg-alt);
@@ -59,5 +54,5 @@
 }
 .tex-log.notice { border-top-color: var(--border); color: var(--text-dim); }
 
-/* AI pane sits at the shared 420px; reuse its collapse rules from style.css. */
-.tex-main #ai-pane { flex: 0 0 380px; }
+/* The AI pane and #divider take their width, collapse and drag styling from
+   style.css unchanged — nothing to override here. */

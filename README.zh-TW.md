@@ -22,6 +22,7 @@
 - [從零開始的使用說明](#從零開始的使用說明)
 - [設定 AI 模型](#設定-ai-模型)
 - [使用方式](#使用方式)
+- [執行測試](#執行測試)
 - [打包成單一執行檔](#打包成單一執行檔)
 - [開發藍圖](#開發藍圖)
 - [授權](#授權)
@@ -203,6 +204,25 @@ docker run --rm -p 8765:8765 -e ANTHROPIC_API_KEY=sk-... -v ai-words-data:/data 
 | `/skill load <name>` | 載入技能 |
 | `/clear` | 清除對話 |
 
+## 執行測試
+
+```bash
+poetry install          # 會一併安裝 dev 群組（pytest）
+poetry run pytest
+```
+
+測試會把所有外部工具都打樁，因此不需要 AI 金鑰、LibreOffice 或 LaTeX 引擎。也可以用兩個 Docker target 在乾淨環境中執行：
+
+```bash
+# 與上面相同的測試，跑在專案指定的 Python 版本上。
+docker build --target test -t ai-words-test . && docker run --rm ai-words-test
+
+# 同上，另外具備真正的 LaTeX 引擎（xelatex + CJK 字型）。
+docker build --target test-tex -t ai-words-test-tex . && docker run --rm ai-words-test-tex
+```
+
+`tests/test_latex_engine.py` 會編譯真實文件——交叉引用是否從重用的 `.aux` 解析、壞掉的文件是否回報編譯日誌、CJK 文件是否找得到字型。這些測試在 `PATH` 上沒有引擎時會**跳過**，這正是 `test-tex` target 存在的理由；一般的 `test` target 跟沒裝引擎的機器一樣會跳過它們。
+
 ## 打包成單一執行檔
 
 啟動器與網頁 UI 皆無建置步驟，因此可用 PyInstaller 產出單一執行檔：
@@ -230,3 +250,6 @@ pyinstaller --onefile --add-data "app/static:app/static" --name ai_words run.py
 ## 授權
 
 詳見 [LICENSE](LICENSE)。
+
+`app/static/vendor/` 內含 [pdf.js](https://github.com/mozilla/pdf.js)（Mozilla，Apache-2.0），
+用於渲染 LaTeX 的 PDF 預覽。

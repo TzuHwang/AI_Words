@@ -49,9 +49,51 @@ COPY tests ./tests
 CMD ["python", "-m", "pytest", "-q"]
 
 # ---------------------------------------------------------------------------
+# TeX — the LaTeX engine layer. Shared by the runtime image and the engine
+# tests below so this (~1GB) apt install is built and cached once.
+#
+# xetex (not pdflatex) plus the CJK fonts so Traditional/Simplified Chinese
+# documents compile — the app's font picker is CJK-first. Baked into the image
+# so the preview works offline and out of the box; without it the LaTeX editor
+# still runs but shows a "no compiler" notice. Drop the texlive-lang-chinese /
+# fonts-noto-cjk packages if you don't need CJK.
+#
+# XeTeX resolves fonts through fontconfig, and scanning the CJK families is slow
+# enough to dominate a first compile. `fc-cache -fs` builds the *system* cache
+# (/var/cache/fontconfig) at build time so it ships inside the image: the app
+# user reads it instead of rebuilding a private one in $HOME on every fresh
+# container. --system-only matters — a plain `fc-cache -f` as root would write
+# to /root/.cache, which appuser can't read.
+# ---------------------------------------------------------------------------
+FROM python:3.14-slim AS texlive
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+       texlive-xetex texlive-latex-recommended texlive-latex-extra \
+       texlive-lang-chinese fonts-noto-cjk fontconfig \
+    && fc-cache -fs \
+    && rm -rf /var/lib/apt/lists/*
+
+# ---------------------------------------------------------------------------
+# Test (engine) — the same suite with a real LaTeX engine on PATH, so the
+# tests in test_latex_engine.py (skipped on a machine without one) actually
+# run. Build/run with:
+#   docker build --target test-tex -t ai-words-test-tex .
+#   docker run --rm ai-words-test-tex
+# ---------------------------------------------------------------------------
+FROM texlive AS test-tex
+ENV VIRTUAL_ENV=/venv/default \
+    PATH="/venv/default/bin:$PATH"
+WORKDIR /app
+COPY --from=test /venv/default /venv/default
+COPY pyproject.toml ./
+COPY app ./app
+COPY tests ./tests
+CMD ["python", "-m", "pytest", "-q"]
+
+# ---------------------------------------------------------------------------
 # Runtime — slim image containing just the venv and the app
 # ---------------------------------------------------------------------------
-FROM python:3.14-slim AS runtime
+FROM texlive AS runtime
 
 # Persist mutable state (config + skills) under /data so a single mounted volume
 # survives restarts without shadowing the app code in /app.
@@ -67,18 +109,6 @@ ENV PYTHONUNBUFFERED=1 \
 # RUN apt-get update \
 #     && apt-get install -y --no-install-recommends libreoffice-writer \
 #     && rm -rf /var/lib/apt/lists/*
-
-# --- LaTeX engine for the /latex editor's PDF preview.
-#     xetex (not pdflatex) plus the CJK fonts so Traditional/Simplified Chinese
-#     documents compile — the app's font picker is CJK-first. Baked into the
-#     image so the preview works offline and out of the box; without it the
-#     LaTeX editor still runs but shows a "no compiler" notice. Drop the
-#     texlive-lang-chinese/fonts-noto-cjk packages if you don't need CJK.
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-       texlive-xetex texlive-latex-recommended texlive-latex-extra \
-       texlive-lang-chinese fonts-noto-cjk \
-    && rm -rf /var/lib/apt/lists/*
 
 RUN useradd --create-home --uid 1000 appuser \
     && mkdir -p /app /data/skills \
