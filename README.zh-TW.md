@@ -22,6 +22,7 @@
 - [從零開始的使用說明](#從零開始的使用說明)
 - [設定 AI 模型](#設定-ai-模型)
 - [使用方式](#使用方式)
+- [加入 LaTeX 模板](#加入-latex-模板)
 - [執行測試](#執行測試)
 - [打包成單一執行檔](#打包成單一執行檔)
 - [開發藍圖](#開發藍圖)
@@ -203,6 +204,52 @@ docker run --rm -p 8765:8765 -e ANTHROPIC_API_KEY=sk-... -v ai-words-data:/data 
 | `/skill new <name>` | 建立新技能 |
 | `/skill load <name>` | 載入技能 |
 | `/clear` | 清除對話 |
+
+## 加入 LaTeX 模板
+
+映像檔內建 `texlive-latex-recommended` 與 `texlive-latex-extra`，涵蓋 `article`、`report`、`book`、`beamer` 等約 280 個 class，但**不包含期刊模板**——那些屬於太過龐大、不適合烤進映像檔的套件集。`IEEEtran`、`acmart`、`elsarticle`、`revtex` 都沒有。文件用到這些會編譯失敗，日誌會明確指出缺哪個檔案：
+
+```
+! LaTeX Error: File `IEEEtran.cls' not found.
+```
+
+不必重建映像檔，把 class 或套件放進 `TEXMFHOME` 即可——容器已將它指向 **`/data/texmf`**，也就是你原本就為了模型與技能而掛載的那個 volume，因此模板會跟其他狀態一起在重啟後留存。`/usr/share/texlive` 底下的系統樹對應用程式的使用者是唯讀的，而 Debian 的 `tlmgr` 也拒絕安裝進去，所以這是唯一的入口。
+
+唯一的規則是檔案必須放在 **`tex/`** 底下的某處。再往下的結構完全自由——`kpathsea` 會遞迴搜尋整棵樹、不限深度——但直接丟在 `texmf/` 根目錄的檔案找不到：
+
+```
+/data/texmf/
+└── tex/
+    └── latex/
+        └── ieeetran/
+            └── IEEEtran.cls      ✅ 找得到
+/data/texmf/
+└── IEEEtran.cls                  ❌ 找不到
+```
+
+使用具名 volume 時，把檔案複製進去再重啟：
+
+```bash
+docker cp IEEEtran.cls $(docker ps -qf ancestor=ai-words):/data/texmf/tex/latex/ieeetran/
+```
+
+或改用綁定掛載一個放在主機上的目錄，長期維護比較方便：
+
+```bash
+mkdir -p ./ai-words-data/texmf/tex/latex/ieeetran
+cp IEEEtran.cls ./ai-words-data/texmf/tex/latex/ieeetran/
+docker run --rm -p 8765:8765 -v ./ai-words-data:/data ai-words
+```
+
+`.sty` 套件同理，`.bst` 參考文獻樣式與字型檔也是——凡是 `kpathsea` 會查找的都適用。不需要重建索引：`TEXMFHOME` 是即時掃描的，檔案放進去之後下一次編譯就生效，不必重啟。
+
+若不透過 Docker 執行，`TEXMFHOME` 的位置由你的 TeX 發行版決定——Linux 與 macOS 通常是 `~/texmf`，某些設定則是 `~/.texlive/texmf-home`。可以這樣查：
+
+```bash
+kpsewhich -var-value=TEXMFHOME
+```
+
+如果你希望某個模板不必靠 volume 就人人可用，那就裝進映像檔：在 [`Dockerfile`](Dockerfile) 的 `texlive` 階段加入對應的 TeX Live 套件（`texlive-publishers` 涵蓋 IEEEtran、`elsarticle` 與 `revtex`；`texlive-science` 涵蓋大部分數學與物理相關套件），然後重建。
 
 ## 執行測試
 

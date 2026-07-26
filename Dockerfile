@@ -114,7 +114,13 @@ ENV PYTHONUNBUFFERED=1 \
     VIRTUAL_ENV=/venv/default \
     PATH="/venv/default/bin:$PATH" \
     AI_WORDS_CONFIG=/data/config.json \
-    AI_WORDS_SKILLS=/data/skills
+    AI_WORDS_SKILLS=/data/skills \
+    # TeX's per-user tree, pointed into /data so document classes and packages
+    # the image doesn't ship (journal templates, say) can be dropped in without
+    # rebuilding it — and survive a restart along with the rest of /data. The
+    # system tree under /usr/share/texlive is read-only to appuser, and Debian's
+    # tlmgr refuses to install, so this is the way in. See the README.
+    TEXMFHOME=/data/texmf
 
 # --- Optional: LibreOffice for higher-fidelity ODT import/export (~1GB).
 #     The app works without it via a pure-Python (odfpy) fallback, so it is
@@ -123,8 +129,10 @@ ENV PYTHONUNBUFFERED=1 \
 #     && apt-get install -y --no-install-recommends libreoffice-writer \
 #     && rm -rf /var/lib/apt/lists/*
 
+# /data/texmf/tex is created empty so a fresh volume shows where TeX files go;
+# kpathsea searches the whole tree below it, at any depth.
 RUN useradd --create-home --uid 1000 appuser \
-    && mkdir -p /app /data/skills \
+    && mkdir -p /app /data/skills /data/texmf/tex \
     && chown -R appuser:appuser /app /data
 WORKDIR /app
 

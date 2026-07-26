@@ -97,3 +97,29 @@ def test_cjk_document_compiles():
     pdf, log = latex.render_tex_to_pdf(CJK)
     assert pdf is not None, log
     assert pdf.startswith(b"%PDF")
+
+
+def test_a_class_dropped_into_texmfhome_is_found(tmp_path, monkeypatch):
+    """Templates the image doesn't ship are added through TEXMFHOME.
+
+    The runtime image points TEXMFHOME at /data/texmf so a class or package can
+    be dropped into the mounted volume instead of rebuilt into the image. What
+    makes that work is that kpathsea searches everything under `tex/`, at any
+    depth — a file left at the root of the tree is *not* found, which is the
+    part worth pinning down.
+    """
+    home = tmp_path / "texmf"
+    (home / "tex" / "latex" / "house").mkdir(parents=True)
+    (home / "tex" / "latex" / "house" / "house.cls").write_text(
+        "\\NeedsTeXFormat{LaTeX2e}\n"
+        "\\ProvidesClass{house}[2026/01/01 test class]\n"
+        "\\LoadClass{article}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("TEXMFHOME", str(home))
+
+    pdf, log = latex.render_tex_to_pdf(
+        "\\documentclass{house}\n\\begin{document}\nHello.\n\\end{document}\n"
+    )
+    assert pdf is not None, log
+    assert pdf.startswith(b"%PDF")

@@ -22,6 +22,7 @@
 - [Getting Started from Scratch](#getting-started-from-scratch)
 - [Configuring AI Models](#configuring-ai-models)
 - [Usage](#usage)
+- [Adding LaTeX Templates](#adding-latex-templates)
 - [Running the Tests](#running-the-tests)
 - [Packaging as an Executable](#packaging-as-an-executable)
 - [Roadmap](#roadmap)
@@ -203,6 +204,52 @@ Assistant slash commands:
 | `/skill new <name>` | Create a new skill |
 | `/skill load <name>` | Load a skill |
 | `/clear` | Clear the conversation |
+
+## Adding LaTeX Templates
+
+The image ships `texlive-latex-recommended` and `texlive-latex-extra`, which cover `article`, `report`, `book`, `beamer` and around 280 other classes — but not the journal templates, which live in collections too large to bake in. `IEEEtran`, `acmart`, `elsarticle` and `revtex` are all absent. A document asking for one fails to compile, and the log says which file it wanted:
+
+```
+! LaTeX Error: File `IEEEtran.cls' not found.
+```
+
+Rather than rebuild the image, drop the class or package into `TEXMFHOME`, which the container points at **`/data/texmf`** — the volume you are already mounting for models and skills, so a template survives a restart like the rest of your state. The system tree under `/usr/share/texlive` is read-only to the app's user, and Debian's `tlmgr` refuses to install into it, so this is the way in.
+
+The one rule is that files must sit somewhere under **`tex/`**. Below that the layout is free — `kpathsea` searches the whole tree at any depth — but a file left at the root of `texmf/` is not found:
+
+```
+/data/texmf/
+└── tex/
+    └── latex/
+        └── ieeetran/
+            └── IEEEtran.cls      ✅ found
+/data/texmf/
+└── IEEEtran.cls                  ❌ not found
+```
+
+With a named volume, copy the files in and restart:
+
+```bash
+docker cp IEEEtran.cls $(docker ps -qf ancestor=ai-words):/data/texmf/tex/latex/ieeetran/
+```
+
+Or bind-mount a directory you keep on the host, which is easier to maintain:
+
+```bash
+mkdir -p ./ai-words-data/texmf/tex/latex/ieeetran
+cp IEEEtran.cls ./ai-words-data/texmf/tex/latex/ieeetran/
+docker run --rm -p 8765:8765 -v ./ai-words-data:/data ai-words
+```
+
+`.sty` packages work the same way, as do `.bst` styles and font files — anything `kpathsea` looks up. No index needs rebuilding: `TEXMFHOME` is scanned live, so a file is picked up on the next compile with no restart.
+
+Running outside Docker, `TEXMFHOME` is wherever your TeX distribution puts it — `~/texmf` on Linux and macOS, `~/.texlive/texmf-home` on some setups. Check with:
+
+```bash
+kpsewhich -var-value=TEXMFHOME
+```
+
+If you would rather have a template available to everyone without a volume, install it into the image instead: add the relevant TeX Live package (`texlive-publishers` covers IEEEtran, `elsarticle` and `revtex`; `texlive-science` covers much of the maths and physics set) to the `texlive` stage in the [`Dockerfile`](Dockerfile) and rebuild.
 
 ## Running the Tests
 
