@@ -1,64 +1,16 @@
 "use strict";
 
-const $ = (sel) => document.querySelector(sel);
+// $ and the AI pane itself come from ui.js / ai-pane.js, loaded first.
 const editor = $("#editor");
-const chatInput = $("#chat-input");
-const sendBtn = $("#send-btn");
-const stopBtn = $("#stop-btn");
-const modelSelect = $("#model-select");
 const docNameEl = $("#doc-name");
 
 let docName = "Untitled";
-let streaming = false;
-let streamAbort = null; // AbortController for the in-flight chat request
 
 // A writable handle to the file the document was opened from, when the File
 // System Access API is available. Ctrl+S writes straight back to it; otherwise
 // it's null and saving falls back to a Save-As picker or a download.
 let fileHandle = null;
 const supportsFsa = "showOpenFilePicker" in window;
-
-// ---------------------------------------------------------------------------
-// In-page dialogs — native alert/confirm/prompt are blocked in embedded
-// webviews (e.g. VS Code's Simple Browser), where calling them freezes the
-// page. These Promise-based equivalents render inside the document instead.
-// ---------------------------------------------------------------------------
-function uiDialog(kind, message, value) {
-  return new Promise((resolve) => {
-    const hasInput = kind === "prompt";
-    const overlay = document.createElement("div");
-    overlay.className = "modal dlg-overlay";
-    overlay.innerHTML =
-      `<div class="modal-box dlg">` +
-      `<div class="dlg-msg"></div>` +
-      (hasInput ? `<input class="dlg-input">` : ``) +
-      `<div class="dlg-actions">` +
-      (kind === "alert" ? `` : `<button class="dlg-cancel">Cancel</button>`) +
-      `<button class="dlg-ok">OK</button></div></div>`;
-    overlay.querySelector(".dlg-msg").textContent = message;
-    const input = overlay.querySelector(".dlg-input");
-    if (input && value != null) input.value = value;
-    document.body.appendChild(overlay);
-    (input || overlay.querySelector(".dlg-ok")).focus();
-
-    const done = (result) => { overlay.remove(); resolve(result); };
-    const okValue = () => (kind === "confirm" ? true : kind === "prompt" ? input.value : undefined);
-    const cancelValue = () => (kind === "confirm" ? false : null);
-    overlay.querySelector(".dlg-ok").addEventListener("click", () => done(okValue()));
-    overlay.querySelector(".dlg-cancel")?.addEventListener("click", () => done(cancelValue()));
-    overlay.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") { e.preventDefault(); done(okValue()); }
-      else if (e.key === "Escape") { e.preventDefault(); done(cancelValue()); }
-    });
-    // Clicking the dark backdrop dismisses like Cancel.
-    overlay.addEventListener("mousedown", (e) => {
-      if (e.target === overlay) done(cancelValue());
-    });
-  });
-}
-const uiAlert = (message) => uiDialog("alert", message);
-const uiConfirm = (message) => uiDialog("confirm", message);
-const uiPrompt = (message, value = "") => uiDialog("prompt", message, value);
 
 // Prefer inline CSS styling for execCommand (font-family, colors, size).
 try { document.execCommand("styleWithCSS", false, true); } catch (_) {}
@@ -244,6 +196,7 @@ document.addEventListener("click", (e) => {
   const act = e.target.closest("[data-act]")?.dataset.act;
   if (!act) { closeMenus(); return; }
   switch (act) {
+    case "home": location.href = "/"; break;
     case "open": openDoc(); break;
     case "save": saveToFile(); break;
     case "save-menu": {
@@ -261,13 +214,6 @@ document.addEventListener("click", (e) => {
     case "insert-page-break": insertPageBreak(); break;
     case "insert-table": insertTable(); break;
     case "insert-link": insertLink(); break;
-    case "toggle-ai": toggleAI(); break;
-    case "skills": openSkills(); break;
-    case "close-skills": $("#skills-modal").hidden = true; break;
-    case "create-skill": createSkill(); break;
-    case "add-model": openModelModal(); break;
-    case "close-model": $("#model-modal").hidden = true; break;
-    case "create-model": createModel(); break;
     case "about":
       uiAlert("AI Words — a LibreOffice-style document editor with an AI assistant.");
       break;
@@ -292,6 +238,23 @@ async function insertTable() {
 async function insertLink() {
   const url = await uiPrompt("Link URL:", "https://");
   if (url) exec("createLink", url);
+}
+
+// Load a document handed off from the launcher (see launcher.js). It stashed
+// already-converted HTML in sessionStorage; consume and clear it once. There's
+// no writable file handle across the navigation, so Ctrl+S will Save-As.
+function consumeHandoff() {
+  const raw = sessionStorage.getItem("aiwords.pending");
+  if (!raw) return;
+  sessionStorage.removeItem("aiwords.pending");
+  let pending;
+  try { pending = JSON.parse(raw); } catch (_) { return; }
+  if (!pending || pending.mode !== "richtext") return;
+  editor.innerHTML = pending.content || "<p><br></p>";
+  docName = (pending.filename || "Untitled").replace(/\.[^.]+$/, "");
+  docNameEl.textContent = pending.filename || docName;
+  updateWordCount();
+  schedulePaginate();
 }
 
 // Send a File's bytes through the server converter and load the result.
@@ -711,595 +674,30 @@ window.addEventListener("load", schedulePaginate);
 if (document.fonts?.ready) document.fonts.ready.then(schedulePaginate);
 
 // ---------------------------------------------------------------------------
-// AI pane: show / hide + draggable resize
+// AI assistant
+//
+// The pane itself — conversation tabs, chat, slash commands, the models and
+// skills panels, the resize divider — is ai-pane.js, shared with the LaTeX
+// editor. Only what is specific to this editor stays here: what counts as "the
+// document", and what applying a proposed one does.
 // ---------------------------------------------------------------------------
-const aiPane = $("#ai-pane");
-const divider = $("#divider");
-let aiWidth = 420; // remembered width so re-opening restores the last size
-
-function toggleAI() {
-  const collapsed = !aiPane.classList.contains("collapsed");
-  if (collapsed) aiWidth = aiPane.getBoundingClientRect().width || aiWidth;
-  aiPane.classList.toggle("collapsed", collapsed);
-  divider.classList.toggle("collapsed", collapsed);
-  $("#toggle-ai").classList.toggle("active", !collapsed);
-  if (!collapsed) aiPane.style.flex = `0 0 ${aiWidth}px`;
-}
-$("#toggle-ai").classList.add("active"); // panel starts visible
-
-let dragging = false;
-divider.addEventListener("mousedown", (e) => {
-  dragging = true;
-  divider.classList.add("dragging");
-  document.body.style.cursor = "col-resize";
-  document.body.style.userSelect = "none";
-  e.preventDefault();
+AiPane.init({
+  placeholder: "Ask about the document, or /help for commands…",
+  getDocument: cleanDocHtml,
+  getSelection: docSelectionText,
+  proposal: {
+    title: "Proposed document",
+    applyLabel: "Apply to document",
+    // The proposal is document HTML, so preview it rendered rather than raw.
+    renderPreview: (doc) => {
+      const el = document.createElement("div");
+      el.className = "dp-preview";
+      el.innerHTML = doc;
+      return el;
+    },
+    apply: replaceEditorContent,
+  },
 });
-window.addEventListener("mousemove", (e) => {
-  if (!dragging) return;
-  const app = $("#app").getBoundingClientRect();
-  let w = app.right - e.clientX;
-  w = Math.max(300, Math.min(w, app.width - 380)); // clamp both panes
-  aiWidth = w;
-  aiPane.style.flex = `0 0 ${w}px`;
-});
-window.addEventListener("mouseup", () => {
-  if (!dragging) return;
-  dragging = false;
-  divider.classList.remove("dragging");
-  document.body.style.cursor = "";
-  document.body.style.userSelect = "";
-});
-
-// ---------------------------------------------------------------------------
-// Models
-// ---------------------------------------------------------------------------
-async function loadModels() {
-  const res = await fetch("/api/models");
-  const data = await res.json();
-  modelSelect.innerHTML = "";
-  data.models.forEach((m) => {
-    const opt = document.createElement("option");
-    opt.value = m.id;
-    opt.textContent = m.label + (m.has_key ? "" : " ⚠");
-    if (m.id === data.active) opt.selected = true;
-    modelSelect.appendChild(opt);
-  });
-}
-modelSelect.addEventListener("change", async () => {
-  await fetch("/api/models/active", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ id: modelSelect.value }),
-  });
-  addSystemMessage(`Switched model to ${modelSelect.options[modelSelect.selectedIndex].text}`);
-});
-
-// -- Add-model modal --------------------------------------------------------
-const mfApiType = $("#mf-api-type");   // wire protocol: anthropic | openai
-const mfProvider = $("#mf-provider");  // free-text brand/provider name
-
-// Placeholder presets per API type, plus show/hide the API-endpoint field
-// (Anthropic uses a fixed endpoint, so it isn't asked for).
-function applyProviderPreset() {
-  const anthropic = mfApiType.value === "anthropic";
-  $("#mf-baseurl-row").hidden = anthropic;
-  $("#mf-model").placeholder = anthropic ? "e.g. claude-opus-4-8" : "e.g. gpt-4o  or  qwen2.5";
-  $("#mf-api-key-env").placeholder = anthropic ? "e.g. ANTHROPIC_API_KEY" : "e.g. OPENAI_API_KEY";
-  $("#mf-base-url").placeholder = "https://api.openai.com/v1  (or http://localhost:11434/v1)";
-  // Offer a sensible default provider name without clobbering a custom one.
-  if (anthropic && (!mfProvider.value || mfProvider.value === "OpenAI")) mfProvider.value = "Anthropic";
-  if (!anthropic && mfProvider.value === "Anthropic") mfProvider.value = "";
-}
-mfApiType.addEventListener("change", applyProviderPreset);
-
-async function openModelModal() {
-  ["#mf-label", "#mf-model", "#mf-base-url", "#mf-api-key", "#mf-api-key-env", "#mf-id", "#mf-provider"]
-    .forEach((s) => { $(s).value = ""; });
-  mfApiType.value = "anthropic";
-  applyProviderPreset();
-  $("#mf-error").hidden = true;
-  await renderModelList();
-  $("#model-modal").hidden = false;
-  $("#mf-label").focus();
-}
-
-// List existing models with a remove button for each.
-async function renderModelList() {
-  const data = await (await fetch("/api/models")).json();
-  const list = $("#model-list");
-  list.innerHTML = "";
-  data.models.forEach((m) => {
-    const li = document.createElement("li");
-    if (m.id === data.active) li.classList.add("active");
-    li.innerHTML =
-      `<span class="ml-name">${escapeHtml(m.label)}</span>` +
-      `<span class="ml-meta">${escapeHtml(m.provider)} · ${escapeHtml(m.model)}</span>` +
-      `<button class="ml-del" title="Remove">✕</button>`;
-    const del = li.querySelector(".ml-del");
-    if (data.models.length <= 1) del.disabled = true;
-    del.addEventListener("click", () => deleteModel(m.id, m.label));
-    list.appendChild(li);
-  });
-}
-
-async function deleteModel(id, label) {
-  if (!(await uiConfirm(`Remove model "${label}"?`))) return;
-  const res = await fetch(`/api/models/${encodeURIComponent(id)}`, { method: "DELETE" });
-  if (!res.ok) {
-    const d = await res.json().catch(() => ({}));
-    await uiAlert("Could not remove: " + (d.detail || res.statusText));
-    return;
-  }
-  await renderModelList();
-  await loadModels();
-  addSystemMessage(`Removed model: ${label}`);
-}
-
-function slugifyModelId(s) {
-  return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "model";
-}
-
-async function createModel() {
-  const err = $("#mf-error");
-  const showError = (m) => { err.textContent = m; err.hidden = false; };
-
-  const apiType = mfApiType.value;
-  const provider = mfProvider.value.trim() || (apiType === "anthropic" ? "Anthropic" : "OpenAI");
-  const label = $("#mf-label").value.trim();
-  const model = $("#mf-model").value.trim();
-  const baseUrl = $("#mf-base-url").value.trim();
-  const apiKey = $("#mf-api-key").value.trim();
-  const apiKeyEnv = $("#mf-api-key-env").value.trim();
-  let id = $("#mf-id").value.trim();
-
-  if (!label) return showError("Display name is required.");
-  if (!model) return showError("Model ID is required.");
-  if (!id) id = slugifyModelId(label);
-
-  const body = { id, label, provider, api_type: apiType, model };
-  if (apiType === "openai" && baseUrl) body.base_url = baseUrl;
-  if (apiKey) body.api_key = apiKey;
-  if (apiKeyEnv) body.api_key_env = apiKeyEnv;
-
-  const submit = $("#mf-submit");
-  submit.disabled = true;
-  try {
-    const res = await fetch("/api/models", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      throw new Error(data.detail || res.statusText);
-    }
-    $("#model-modal").hidden = true;
-    await loadModels();
-    // Switch to the model that was just added.
-    modelSelect.value = id;
-    await fetch("/api/models/active", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id }),
-    });
-    addSystemMessage(`Added and switched to model: ${label}`);
-  } catch (e2) {
-    showError("Could not add model: " + e2.message);
-  } finally {
-    submit.disabled = false;
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Skills
-// ---------------------------------------------------------------------------
-async function openSkills() {
-  await renderSkills();
-  $("#skills-modal").hidden = false;
-}
-async function renderSkills() {
-  const res = await fetch("/api/skills");
-  const data = await res.json();
-  const list = $("#skills-list");
-  list.innerHTML = "";
-  if (!data.skills.length) {
-    list.innerHTML = "<li class='hint'>No skills yet. Create one below.</li>";
-  }
-  data.skills.forEach((s) => {
-    const li = document.createElement("li");
-    const loaded = data.active.includes(s.name);
-    li.innerHTML = `<input type="checkbox" ${loaded ? "checked" : ""}>
-      <span class="sk-name">${escapeHtml(s.name)}</span>
-      <span class="sk-desc">${escapeHtml(s.description || "")}</span>
-      <button class="sk-del">Delete</button>`;
-    li.querySelector("input").addEventListener("change", async () => {
-      const active = [...list.querySelectorAll("li")]
-        .filter((el) => el.querySelector("input")?.checked)
-        .map((el) => el.querySelector(".sk-name")?.textContent);
-      await fetch("/api/skills/active", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ active }),
-      });
-    });
-    li.querySelector(".sk-del").addEventListener("click", async () => {
-      await fetch(`/api/skills/${encodeURIComponent(s.name)}`, { method: "DELETE" });
-      renderSkills();
-    });
-    list.appendChild(li);
-  });
-}
-async function createSkill() {
-  const name = $("#skill-name").value.trim();
-  const body = $("#skill-body").value.trim();
-  if (!name) { await uiAlert("Skill name is required."); return; }
-  await fetch("/api/skills", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, body }),
-  });
-  $("#skill-name").value = "";
-  $("#skill-body").value = "";
-  renderSkills();
-}
-
-// ---------------------------------------------------------------------------
-// Conversation tabs (multiple independent AI chats)
-// ---------------------------------------------------------------------------
-const tabListEl = $("#tab-list");
-const panelsEl = $("#tab-panels");
-let sessions = [];      // { id, title, autoTitle, history: [], el: <div.messages> }
-let activeId = null;
-let seq = 0;
-
-function activeSession() {
-  return sessions.find((s) => s.id === activeId);
-}
-function activeMessagesEl() {
-  return activeSession()?.el;
-}
-
-function createSession(activate = true) {
-  const id = ++seq;
-  const el = document.createElement("div");
-  el.className = "messages";
-  el.dataset.session = String(id);
-  panelsEl.appendChild(el);
-  const session = { id, title: `Chat ${id}`, autoTitle: true, history: [], el };
-  sessions.push(session);
-  renderTabs();
-  if (activate) setActive(id);
-  return session;
-}
-
-function setActive(id) {
-  activeId = id;
-  sessions.forEach((s) => s.el.classList.toggle("active", s.id === id));
-  renderTabs();
-  chatInput.focus();
-}
-
-function closeSession(id) {
-  const idx = sessions.findIndex((s) => s.id === id);
-  if (idx === -1) return;
-  sessions[idx].el.remove();
-  sessions.splice(idx, 1);
-  if (!sessions.length) { createSession(); return; }
-  if (activeId === id) {
-    setActive(sessions[Math.max(0, idx - 1)].id);
-  } else {
-    renderTabs();
-  }
-}
-
-function renderTabs() {
-  tabListEl.innerHTML = "";
-  sessions.forEach((s) => {
-    const tab = document.createElement("div");
-    tab.className = "tab" + (s.id === activeId ? " active" : "");
-    tab.innerHTML = `<span class="tab-title"></span><button class="tab-close" title="Close">✕</button>`;
-    tab.querySelector(".tab-title").textContent = s.title;
-    tab.title = s.title;
-    tab.addEventListener("click", (e) => {
-      if (e.target.closest(".tab-close")) return;
-      setActive(s.id);
-    });
-    tab.querySelector(".tab-close").addEventListener("click", (e) => {
-      e.stopPropagation();
-      closeSession(s.id);
-    });
-    tabListEl.appendChild(tab);
-  });
-}
-
-$("#tab-add").addEventListener("click", () => createSession());
-
-// ---------------------------------------------------------------------------
-// Chat
-// ---------------------------------------------------------------------------
-chatInput.addEventListener("input", () => {
-  chatInput.style.height = "auto";
-  chatInput.style.height = Math.min(chatInput.scrollHeight, 160) + "px";
-});
-chatInput.addEventListener("keydown", (e) => {
-  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
-});
-sendBtn.addEventListener("click", send);
-stopBtn.addEventListener("click", () => streamAbort?.abort());
-
-async function send() {
-  const text = chatInput.value.trim();
-  if (!text || streaming) return;
-  chatInput.value = "";
-  chatInput.style.height = "auto";
-
-  if (text.startsWith("/")) { await handleCommand(text); return; }
-
-  const session = activeSession();
-  addMessage("user", text);
-  session.history.push({ role: "user", content: text });
-  if (session.autoTitle) {
-    session.title = text.length > 22 ? text.slice(0, 22) + "…" : text;
-    session.autoTitle = false;
-    renderTabs();
-  }
-  await streamAssistant(session);
-}
-
-function fmtSecs(ms) {
-  const s = ms / 1000;
-  return s < 60 ? `${s.toFixed(0)}s` : `${Math.floor(s / 60)}m ${Math.round(s % 60)}s`;
-}
-
-async function streamAssistant(session) {
-  streaming = true;
-  streamAbort = new AbortController();
-  sendBtn.hidden = true;
-  stopBtn.hidden = false;
-  const { bubble, msg } = addMessage("assistant", "", session.el);
-  let full = "";
-
-  const start = performance.now();
-  const state = { hadThinking: false, reasonedMs: 0, firstAnswer: false };
-
-  const render = () => {
-    const { text } = stripDocBlock(full);
-    const hasAnswer = text.length > 0;
-    if (!hasAnswer && (/<think>/i.test(full) || full.trim())) state.hadThinking = true;
-    if (hasAnswer && !state.firstAnswer) {
-      state.firstAnswer = true;
-      state.reasonedMs = performance.now() - start;
-    }
-    let head = "";
-    if (!hasAnswer) {
-      head = `<div class="reasoning"><span class="spin"></span>` +
-        `Reasoning… <b>${fmtSecs(performance.now() - start)}</b></div>`;
-    } else if (state.hadThinking || state.reasonedMs > 1500) {
-      head = `<div class="reasoned">💭 Reasoned for ${fmtSecs(state.reasonedMs)}</div>`;
-    }
-    bubble.innerHTML = head + renderMarkdown(text);
-    session.el.scrollTop = session.el.scrollHeight;
-  };
-
-  render();
-  const ticker = setInterval(render, 250);
-
-  try {
-    const res = await fetch("/api/chat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        messages: session.history,
-        document_html: cleanDocHtml(),
-        selection_text: docSelectionText(),
-      }),
-      signal: streamAbort.signal,
-    });
-    if (!res.ok) throw new Error(res.statusText);
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n\n");
-      buffer = lines.pop();
-      for (const block of lines) {
-        const line = block.trim();
-        if (!line.startsWith("data:")) continue;
-        const payload = JSON.parse(line.slice(5).trim());
-        if (payload.error) throw new Error(payload.error);
-        if (payload.delta) {
-          full += payload.delta;
-          render();
-        }
-      }
-    }
-    clearInterval(ticker);
-    session.history.push({ role: "assistant", content: full });
-    finalizeAssistant(msg, bubble, full, state);
-  } catch (err) {
-    clearInterval(ticker);
-    if (err.name === "AbortError") {
-      // Stopped by the user — keep whatever streamed so far.
-      if (full.trim()) {
-        session.history.push({ role: "assistant", content: full });
-        finalizeAssistant(msg, bubble, full, state);
-      } else {
-        bubble.innerHTML = `<span style="color:var(--text-dim)">Stopped.</span>`;
-      }
-    } else {
-      bubble.innerHTML = `<span style="color:var(--accent)">Error: ${escapeHtml(err.message)}</span>`;
-    }
-  } finally {
-    streaming = false;
-    streamAbort = null;
-    sendBtn.hidden = false;
-    stopBtn.hidden = true;
-    session.el.scrollTop = session.el.scrollHeight;
-  }
-}
-
-function finalizeAssistant(msg, bubble, full, state = {}) {
-  const { text, doc } = stripDocBlock(full);
-  const head = state.hadThinking || (state.reasonedMs || 0) > 1500
-    ? `<div class="reasoned">💭 Reasoned for ${fmtSecs(state.reasonedMs || 0)}</div>`
-    : "";
-  bubble.innerHTML = head + renderMarkdown(text);
-  if (doc != null) {
-    const box = document.createElement("div");
-    box.className = "doc-proposal";
-    box.innerHTML = `
-      <div class="dp-head"><span>Proposed document</span>
-        <button class="apply-btn">Apply to document</button></div>
-      <div class="dp-preview"></div>`;
-    box.querySelector(".dp-preview").innerHTML = doc;
-    const btn = box.querySelector(".apply-btn");
-    btn.addEventListener("click", () => {
-      replaceEditorContent(doc);
-      btn.textContent = "Applied ✓";
-      btn.classList.add("applied");
-      btn.disabled = true;
-    });
-    msg.appendChild(box);
-  }
-}
-
-// Remove <think>...</think> reasoning emitted by local reasoning models.
-function stripThinking(text) {
-  let t = text.replace(/<think>[\s\S]*?<\/think>/gi, "");
-  const open = t.lastIndexOf("<think>");
-  if (open !== -1 && t.indexOf("</think>", open) === -1) t = t.slice(0, open);
-  const close = t.indexOf("</think>");
-  if (close !== -1 && t.lastIndexOf("<think>", close) === -1) {
-    t = t.slice(close + "</think>".length);
-  }
-  return t.trim();
-}
-
-// Extract a ```ai_words:document ... ``` block from assistant text.
-function stripDocBlock(text) {
-  text = stripThinking(text);
-  const re = /```ai_words:document\s*\n([\s\S]*?)```/;
-  const m = text.match(re);
-  if (!m) return { text, doc: null };
-  const doc = m[1].trim();
-  const cleaned = text.replace(re, "").trim();
-  return { text: cleaned, doc };
-}
-
-function addMessage(role, content, target = activeMessagesEl()) {
-  const msg = document.createElement("div");
-  msg.className = "msg " + role;
-  const roleLabel = role === "user" ? "You" : role === "assistant" ? "Assistant" : "";
-  msg.innerHTML = `${roleLabel ? `<span class="role">${roleLabel}</span>` : ""}<div class="bubble"></div>`;
-  const bubble = msg.querySelector(".bubble");
-  bubble.innerHTML = renderMarkdown(content);
-  target.appendChild(msg);
-  target.scrollTop = target.scrollHeight;
-  return { msg, bubble };
-}
-function addSystemMessage(text, target = activeMessagesEl()) {
-  const msg = document.createElement("div");
-  msg.className = "msg system";
-  msg.innerHTML = `<div class="bubble">${escapeHtml(text)}</div>`;
-  target.appendChild(msg);
-  target.scrollTop = target.scrollHeight;
-}
-
-// ---------------------------------------------------------------------------
-// Slash commands
-// ---------------------------------------------------------------------------
-async function handleCommand(text) {
-  const [cmd, ...rest] = text.slice(1).split(/\s+/);
-  const arg = rest.join(" ");
-  switch (cmd) {
-    case "help":
-      addSystemMessage(
-        "Commands:\n" +
-        "/help — show this help\n" +
-        "/new — open a new conversation tab\n" +
-        "/models — list available models\n" +
-        "/model <id> — switch active model\n" +
-        "/skills — open the skills panel\n" +
-        "/skill new <name> — create a skill (opens panel)\n" +
-        "/skill load <name> — load a skill\n" +
-        "/clear — clear this conversation");
-      break;
-    case "new":
-      createSession();
-      addSystemMessage("New conversation. Type /help for commands.");
-      break;
-    case "models": {
-      const data = await (await fetch("/api/models")).json();
-      addSystemMessage(data.models.map((m) =>
-        `${m.id === data.active ? "● " : "○ "}${m.id} — ${m.label}`).join("\n"));
-      break;
-    }
-    case "model":
-      if (!arg) { addSystemMessage("Usage: /model <id>"); break; }
-      await fetch("/api/models/active", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: arg }),
-      });
-      await loadModels();
-      addSystemMessage(`Active model: ${arg}`);
-      break;
-    case "skills":
-      openSkills();
-      break;
-    case "skill": {
-      const [sub, ...nameParts] = rest;
-      const name = nameParts.join(" ");
-      if (sub === "new") {
-        openSkills();
-        if (name) $("#skill-name").value = name;
-      } else if (sub === "load" && name) {
-        const data = await (await fetch("/api/skills")).json();
-        const active = Array.from(new Set([...data.active, name]));
-        await fetch("/api/skills/active", {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ active }),
-        });
-        addSystemMessage(`Loaded skill: ${name}`);
-      } else {
-        addSystemMessage("Usage: /skill new <name> | /skill load <name>");
-      }
-      break;
-    }
-    case "clear": {
-      const s = activeSession();
-      s.history = [];
-      s.el.innerHTML = "";
-      s.title = `Chat ${s.id}`;
-      s.autoTitle = true;
-      renderTabs();
-      addSystemMessage("Conversation cleared.");
-      break;
-    }
-    default:
-      addSystemMessage(`Unknown command: /${cmd}. Try /help.`);
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Minimal markdown rendering (safe: escapes HTML first)
-// ---------------------------------------------------------------------------
-function renderMarkdown(text) {
-  if (!text) return "";
-  let html = escapeHtml(text);
-  html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) =>
-    `<pre><code>${code}</code></pre>`);
-  html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
-  html = html.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
-  html = html.replace(/(^|[^*])\*([^*]+)\*/g, "$1<em>$2</em>");
-  return html;
-}
-function escapeHtml(s) {
-  return String(s)
-    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-}
 
 // ---------------------------------------------------------------------------
 // Keyboard shortcuts
@@ -1324,8 +722,6 @@ editor.addEventListener("keydown", (e) => {
 // ---------------------------------------------------------------------------
 // Init
 // ---------------------------------------------------------------------------
-loadModels();
+consumeHandoff();
 updateWordCount();
 paginate();
-createSession();
-addSystemMessage("Assistant ready. Type /help for commands.");

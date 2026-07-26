@@ -22,6 +22,8 @@
 - [Getting Started from Scratch](#getting-started-from-scratch)
 - [Configuring AI Models](#configuring-ai-models)
 - [Usage](#usage)
+- [Adding LaTeX Templates](#adding-latex-templates)
+- [Running the Tests](#running-the-tests)
 - [Packaging as an Executable](#packaging-as-an-executable)
 - [Roadmap](#roadmap)
 - [License](#license)
@@ -203,6 +205,82 @@ Assistant slash commands:
 | `/skill load <name>` | Load a skill |
 | `/clear` | Clear the conversation |
 
+## Adding LaTeX Templates
+
+The image ships `texlive-latex-recommended` and `texlive-latex-extra`, which cover `article`, `report`, `book`, `beamer` and around 280 other classes — but not the journal templates, which live in collections too large to bake in. `IEEEtran`, `acmart`, `elsarticle` and `revtex` are all absent. A document asking for one fails to compile, and the log says which file it wanted:
+
+```
+! LaTeX Error: File `IEEEtran.cls' not found.
+```
+
+Rather than rebuild the image, drop the class or package into `TEXMFHOME`, which the container points at **`/data/texmf`** — the volume you are already mounting for models and skills, so a template survives a restart like the rest of your state. The system tree under `/usr/share/texlive` is read-only to the app's user, and Debian's `tlmgr` refuses to install into it, so this is the way in.
+
+The one rule is that files must sit somewhere under **`tex/`**. Below that the layout is free — `kpathsea` searches the whole tree at any depth — but a file left at the root of `texmf/` is not found:
+
+```
+/data/texmf/
+└── tex/
+    └── latex/
+        └── ieeetran/
+            └── IEEEtran.cls      ✅ found
+/data/texmf/
+└── IEEEtran.cls                  ❌ not found
+```
+
+With a named volume, copy the files in and restart:
+
+```bash
+docker cp IEEEtran.cls $(docker ps -qf ancestor=ai-words):/data/texmf/tex/latex/ieeetran/
+```
+
+Or bind-mount a directory you keep on the host, which is easier to maintain:
+
+```bash
+mkdir -p ./ai-words-data/texmf/tex/latex/ieeetran
+cp IEEEtran.cls ./ai-words-data/texmf/tex/latex/ieeetran/
+docker run --rm -p 8765:8765 -v ./ai-words-data:/data ai-words
+```
+
+`.sty` packages work the same way, as do `.bst` styles and font files — anything `kpathsea` looks up. No index needs rebuilding: `TEXMFHOME` is scanned live, so a file is picked up on the next compile with no restart.
+
+Running outside Docker, `TEXMFHOME` is wherever your TeX distribution puts it — `~/texmf` on Linux and macOS, `~/.texlive/texmf-home` on some setups. Check with:
+
+```bash
+kpsewhich -var-value=TEXMFHOME
+```
+
+If you would rather have a template available to everyone without a volume, install it into the image instead: add the relevant TeX Live package (`texlive-publishers` covers IEEEtran, `elsarticle` and `revtex`; `texlive-science` covers much of the maths and physics set) to the `texlive` stage in the [`Dockerfile`](Dockerfile) and rebuild.
+
+## Running the Tests
+
+```bash
+poetry install          # includes the dev group (pytest)
+poetry run pytest
+```
+
+The suite stubs out every external tool, so it needs neither an AI key nor LibreOffice nor a LaTeX engine nor a browser. Anything that does need one of those **skips** rather than fails, so a bare `pytest` is always green. Three Docker targets supply the missing pieces:
+
+```bash
+# The suite as above, on the project's Python version.
+docker build --target test -t ai-words-test . && docker run --rm ai-words-test
+
+# The same, plus a real LaTeX engine (xelatex + CJK fonts).
+docker build --target test-tex -t ai-words-test-tex . && docker run --rm ai-words-test-tex
+
+# The same, plus Chromium, for the browser tests.
+docker build --target test-ui -t ai-words-test-ui . && docker run --rm ai-words-test-ui
+```
+
+`tests/test_latex_engine.py` compiles actual documents — cross references resolving from a reused `.aux`, a broken document reporting its log, a CJK document finding its fonts. It skips when no engine is on `PATH`.
+
+`tests/test_ui.py` drives both editors in real Chromium, because nothing else in the suite can see layout: it checks that the AI pane is laid out identically on `/editor` and `/latex`, that the transcript is visible and the composer sits at the bottom, and that the divider drag and collapse behave the same on both. It skips unless a browser is installed. To run it outside Docker, fetch one once:
+
+```bash
+poetry run playwright install chromium
+```
+
+None of this reaches the deployed image: `runtime` copies its virtualenv from the `builder` stage, which installs `--only main`, so the dev group — pytest, Playwright and all — is never in it.
+
 ## Packaging as an Executable
 
 The launcher and web UI have no build step, so a single-file executable can be produced with PyInstaller:
@@ -230,3 +308,6 @@ pyinstaller --onefile --add-data "app/static:app/static" --name ai_words run.py
 ## License
 
 See [LICENSE](LICENSE).
+
+`app/static/vendor/` bundles [pdf.js](https://github.com/mozilla/pdf.js) (Mozilla, Apache-2.0),
+which renders the LaTeX PDF preview.

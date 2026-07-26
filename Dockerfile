@@ -49,9 +49,64 @@ COPY tests ./tests
 CMD ["python", "-m", "pytest", "-q"]
 
 # ---------------------------------------------------------------------------
+# Test (browser) — the same suite with Chromium installed, so the layout tests
+# in test_ui.py (skipped without a browser) actually run. `--with-deps` pulls
+# the shared libraries Chromium needs on a slim image, which is most of the
+# ~400MB this target adds over `test`. Build/run with:
+#   docker build --target test-ui -t ai-words-test-ui .
+#   docker run --rm ai-words-test-ui
+# ---------------------------------------------------------------------------
+FROM test AS test-ui
+RUN playwright install --with-deps chromium \
+    && rm -rf /var/lib/apt/lists/*
+CMD ["python", "-m", "pytest", "-q"]
+
+# ---------------------------------------------------------------------------
+# TeX — the LaTeX engine layer. Shared by the runtime image and the engine
+# tests below so this (~1GB) apt install is built and cached once.
+#
+# xetex (not pdflatex) plus the CJK fonts so Traditional/Simplified Chinese
+# documents compile — the app's font picker is CJK-first. Baked into the image
+# so the preview works offline and out of the box; without it the LaTeX editor
+# still runs but shows a "no compiler" notice. Drop the texlive-lang-chinese /
+# fonts-noto-cjk packages if you don't need CJK.
+#
+# XeTeX resolves fonts through fontconfig, and scanning the CJK families is slow
+# enough to dominate a first compile. `fc-cache -fs` builds the *system* cache
+# (/var/cache/fontconfig) at build time so it ships inside the image: the app
+# user reads it instead of rebuilding a private one in $HOME on every fresh
+# container. --system-only matters — a plain `fc-cache -f` as root would write
+# to /root/.cache, which appuser can't read.
+# ---------------------------------------------------------------------------
+FROM python:3.14-slim AS texlive
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+       texlive-xetex texlive-latex-recommended texlive-latex-extra \
+       texlive-lang-chinese fonts-noto-cjk fontconfig \
+    && fc-cache -fs \
+    && rm -rf /var/lib/apt/lists/*
+
+# ---------------------------------------------------------------------------
+# Test (engine) — the same suite with a real LaTeX engine on PATH, so the
+# tests in test_latex_engine.py (skipped on a machine without one) actually
+# run. Build/run with:
+#   docker build --target test-tex -t ai-words-test-tex .
+#   docker run --rm ai-words-test-tex
+# ---------------------------------------------------------------------------
+FROM texlive AS test-tex
+ENV VIRTUAL_ENV=/venv/default \
+    PATH="/venv/default/bin:$PATH"
+WORKDIR /app
+COPY --from=test /venv/default /venv/default
+COPY pyproject.toml ./
+COPY app ./app
+COPY tests ./tests
+CMD ["python", "-m", "pytest", "-q"]
+
+# ---------------------------------------------------------------------------
 # Runtime — slim image containing just the venv and the app
 # ---------------------------------------------------------------------------
-FROM python:3.14-slim AS runtime
+FROM texlive AS runtime
 
 # Persist mutable state (config + skills) under /data so a single mounted volume
 # survives restarts without shadowing the app code in /app.
@@ -59,7 +114,13 @@ ENV PYTHONUNBUFFERED=1 \
     VIRTUAL_ENV=/venv/default \
     PATH="/venv/default/bin:$PATH" \
     AI_WORDS_CONFIG=/data/config.json \
-    AI_WORDS_SKILLS=/data/skills
+    AI_WORDS_SKILLS=/data/skills \
+    # TeX's per-user tree, pointed into /data so document classes and packages
+    # the image doesn't ship (journal templates, say) can be dropped in without
+    # rebuilding it — and survive a restart along with the rest of /data. The
+    # system tree under /usr/share/texlive is read-only to appuser, and Debian's
+    # tlmgr refuses to install, so this is the way in. See the README.
+    TEXMFHOME=/data/texmf
 
 # --- Optional: LibreOffice for higher-fidelity ODT import/export (~1GB).
 #     The app works without it via a pure-Python (odfpy) fallback, so it is
@@ -68,8 +129,10 @@ ENV PYTHONUNBUFFERED=1 \
 #     && apt-get install -y --no-install-recommends libreoffice-writer \
 #     && rm -rf /var/lib/apt/lists/*
 
+# /data/texmf/tex is created empty so a fresh volume shows where TeX files go;
+# kpathsea searches the whole tree below it, at any depth.
 RUN useradd --create-home --uid 1000 appuser \
-    && mkdir -p /app /data/skills \
+    && mkdir -p /app /data/skills /data/texmf/tex \
     && chown -R appuser:appuser /app /data
 WORKDIR /app
 

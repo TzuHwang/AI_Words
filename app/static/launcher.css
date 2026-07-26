@@ -1,0 +1,63 @@
+/* Launcher — format chooser shown at /. Reuses the theme variables from
+   style.css; only the chooser layout lives here. */
+
+#launcher {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 40px 20px;
+  background: var(--bg-alt);
+}
+
+.lc-title { margin: 0; font-size: 34px; font-weight: 650; letter-spacing: -.5px; }
+.lc-sub { margin: 0 0 26px; color: var(--text-dim); font-size: 15px; }
+
+.lc-cards { display: flex; gap: 22px; flex-wrap: wrap; justify-content: center; }
+
+.lc-card {
+  width: 210px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 30px 22px;
+  text-decoration: none;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  transition: transform .12s, border-color .12s, box-shadow .12s;
+}
+.lc-card:hover {
+  transform: translateY(-3px);
+  border-color: var(--accent);
+  box-shadow: 0 6px 18px rgba(0,0,0,.14);
+}
+.lc-icon { font-size: 46px; line-height: 1; }
+.lc-name { font-size: 19px; font-weight: 600; }
+.lc-desc { font-size: 12.5px; color: var(--text-dim); text-align: center; }
+
+.lc-or {
+  width: 100%; max-width: 460px; margin: 30px 0 6px;
+  text-align: center; position: relative; color: var(--text-dim); font-size: 13px;
+}
+.lc-or::before {
+  content: ""; position: absolute; top: 50%; left: 0; right: 0;
+  height: 1px; background: var(--border);
+}
+.lc-or span { position: relative; background: var(--bg-alt); padding: 0 12px; }
+
+.lc-open {
+  font: inherit; font-size: 14px;
+  padding: 10px 18px; border-radius: 8px; cursor: pointer;
+  color: var(--text); background: var(--bg); border: 1px solid var(--border);
+  transition: border-color .12s, background .12s;
+}
+.lc-open:hover { border-color: var(--accent); }
+.lc-open:disabled { opacity: .6; cursor: default; }
+
+.lc-error { margin: 10px 0 0; color: var(--accent); font-size: 13px; }

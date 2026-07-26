@@ -22,6 +22,8 @@
 - [從零開始的使用說明](#從零開始的使用說明)
 - [設定 AI 模型](#設定-ai-模型)
 - [使用方式](#使用方式)
+- [加入 LaTeX 模板](#加入-latex-模板)
+- [執行測試](#執行測試)
 - [打包成單一執行檔](#打包成單一執行檔)
 - [開發藍圖](#開發藍圖)
 - [授權](#授權)
@@ -203,6 +205,82 @@ docker run --rm -p 8765:8765 -e ANTHROPIC_API_KEY=sk-... -v ai-words-data:/data 
 | `/skill load <name>` | 載入技能 |
 | `/clear` | 清除對話 |
 
+## 加入 LaTeX 模板
+
+映像檔內建 `texlive-latex-recommended` 與 `texlive-latex-extra`，涵蓋 `article`、`report`、`book`、`beamer` 等約 280 個 class，但**不包含期刊模板**——那些屬於太過龐大、不適合烤進映像檔的套件集。`IEEEtran`、`acmart`、`elsarticle`、`revtex` 都沒有。文件用到這些會編譯失敗，日誌會明確指出缺哪個檔案：
+
+```
+! LaTeX Error: File `IEEEtran.cls' not found.
+```
+
+不必重建映像檔，把 class 或套件放進 `TEXMFHOME` 即可——容器已將它指向 **`/data/texmf`**，也就是你原本就為了模型與技能而掛載的那個 volume，因此模板會跟其他狀態一起在重啟後留存。`/usr/share/texlive` 底下的系統樹對應用程式的使用者是唯讀的，而 Debian 的 `tlmgr` 也拒絕安裝進去，所以這是唯一的入口。
+
+唯一的規則是檔案必須放在 **`tex/`** 底下的某處。再往下的結構完全自由——`kpathsea` 會遞迴搜尋整棵樹、不限深度——但直接丟在 `texmf/` 根目錄的檔案找不到：
+
+```
+/data/texmf/
+└── tex/
+    └── latex/
+        └── ieeetran/
+            └── IEEEtran.cls      ✅ 找得到
+/data/texmf/
+└── IEEEtran.cls                  ❌ 找不到
+```
+
+使用具名 volume 時，把檔案複製進去再重啟：
+
+```bash
+docker cp IEEEtran.cls $(docker ps -qf ancestor=ai-words):/data/texmf/tex/latex/ieeetran/
+```
+
+或改用綁定掛載一個放在主機上的目錄，長期維護比較方便：
+
+```bash
+mkdir -p ./ai-words-data/texmf/tex/latex/ieeetran
+cp IEEEtran.cls ./ai-words-data/texmf/tex/latex/ieeetran/
+docker run --rm -p 8765:8765 -v ./ai-words-data:/data ai-words
+```
+
+`.sty` 套件同理，`.bst` 參考文獻樣式與字型檔也是——凡是 `kpathsea` 會查找的都適用。不需要重建索引：`TEXMFHOME` 是即時掃描的，檔案放進去之後下一次編譯就生效，不必重啟。
+
+若不透過 Docker 執行，`TEXMFHOME` 的位置由你的 TeX 發行版決定——Linux 與 macOS 通常是 `~/texmf`，某些設定則是 `~/.texlive/texmf-home`。可以這樣查：
+
+```bash
+kpsewhich -var-value=TEXMFHOME
+```
+
+如果你希望某個模板不必靠 volume 就人人可用，那就裝進映像檔：在 [`Dockerfile`](Dockerfile) 的 `texlive` 階段加入對應的 TeX Live 套件（`texlive-publishers` 涵蓋 IEEEtran、`elsarticle` 與 `revtex`；`texlive-science` 涵蓋大部分數學與物理相關套件），然後重建。
+
+## 執行測試
+
+```bash
+poetry install          # 會一併安裝 dev 群組（pytest）
+poetry run pytest
+```
+
+測試會把所有外部工具都打樁，因此不需要 AI 金鑰、LibreOffice、LaTeX 引擎或瀏覽器。需要這些的測試會**跳過**而不是失敗，所以直接跑 `pytest` 永遠是綠的。三個 Docker target 分別補上缺的那一塊：
+
+```bash
+# 與上面相同的測試，跑在專案指定的 Python 版本上。
+docker build --target test -t ai-words-test . && docker run --rm ai-words-test
+
+# 同上，另外具備真正的 LaTeX 引擎（xelatex + CJK 字型）。
+docker build --target test-tex -t ai-words-test-tex . && docker run --rm ai-words-test-tex
+
+# 同上，另外具備 Chromium，用於瀏覽器測試。
+docker build --target test-ui -t ai-words-test-ui . && docker run --rm ai-words-test-ui
+```
+
+`tests/test_latex_engine.py` 會編譯真實文件——交叉引用是否從重用的 `.aux` 解析、壞掉的文件是否回報編譯日誌、CJK 文件是否找得到字型。`PATH` 上沒有引擎時會跳過。
+
+`tests/test_ui.py` 用真正的 Chromium driving 兩個編輯器，因為測試套件裡沒有別的東西看得見版面：它檢查 `/editor` 與 `/latex` 的 AI 區版面完全一致、對話內容可見且輸入框位在底部、分隔條的拖曳與收合在兩頁行為相同。沒裝瀏覽器時會跳過。要在 Docker 之外執行，先抓一次瀏覽器：
+
+```bash
+poetry run playwright install chromium
+```
+
+這些都不會進到部署映像檔：`runtime` 是從 `builder` 階段複製 virtualenv，而該階段只跑 `--only main`，所以 dev 群組（pytest、Playwright 等）從來不在裡面。
+
 ## 打包成單一執行檔
 
 啟動器與網頁 UI 皆無建置步驟，因此可用 PyInstaller 產出單一執行檔：
@@ -230,3 +308,6 @@ pyinstaller --onefile --add-data "app/static:app/static" --name ai_words run.py
 ## 授權
 
 詳見 [LICENSE](LICENSE)。
+
+`app/static/vendor/` 內含 [pdf.js](https://github.com/mozilla/pdf.js)（Mozilla，Apache-2.0），
+用於渲染 LaTeX 的 PDF 預覽。
