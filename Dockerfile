@@ -49,6 +49,19 @@ COPY tests ./tests
 CMD ["python", "-m", "pytest", "-q"]
 
 # ---------------------------------------------------------------------------
+# Test (browser) — the same suite with Chromium installed, so the layout tests
+# in test_ui.py (skipped without a browser) actually run. `--with-deps` pulls
+# the shared libraries Chromium needs on a slim image, which is most of the
+# ~400MB this target adds over `test`. Build/run with:
+#   docker build --target test-ui -t ai-words-test-ui .
+#   docker run --rm ai-words-test-ui
+# ---------------------------------------------------------------------------
+FROM test AS test-ui
+RUN playwright install --with-deps chromium \
+    && rm -rf /var/lib/apt/lists/*
+CMD ["python", "-m", "pytest", "-q"]
+
+# ---------------------------------------------------------------------------
 # TeX — the LaTeX engine layer. Shared by the runtime image and the engine
 # tests below so this (~1GB) apt install is built and cached once.
 #

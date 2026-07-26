@@ -20,6 +20,10 @@ truststore = ">=0.9"  # trust the OS certificate store (corporate proxy / MITM C
 # Dev-only tools. Installed with `poetry install`, excluded from the Docker
 # image (which uses `poetry install --only main`).
 pytest = ">=8.0"
+# Drives a real browser for tests/test_ui.py. The package alone is not enough —
+# the browser binary is a separate download (`playwright install chromium`), and
+# those tests skip without it, so this stays cheap for anyone who never runs it.
+pytest-playwright = ">=0.8"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

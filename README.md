@@ -211,7 +211,7 @@ poetry install          # includes the dev group (pytest)
 poetry run pytest
 ```
 
-The suite stubs out every external tool, so it needs neither an AI key nor LibreOffice nor a LaTeX engine. Two Docker targets run it in a clean environment:
+The suite stubs out every external tool, so it needs neither an AI key nor LibreOffice nor a LaTeX engine nor a browser. Anything that does need one of those **skips** rather than fails, so a bare `pytest` is always green. Three Docker targets supply the missing pieces:
 
 ```bash
 # The suite as above, on the project's Python version.
@@ -219,9 +219,20 @@ docker build --target test -t ai-words-test . && docker run --rm ai-words-test
 
 # The same, plus a real LaTeX engine (xelatex + CJK fonts).
 docker build --target test-tex -t ai-words-test-tex . && docker run --rm ai-words-test-tex
+
+# The same, plus Chromium, for the browser tests.
+docker build --target test-ui -t ai-words-test-ui . && docker run --rm ai-words-test-ui
 ```
 
-`tests/test_latex_engine.py` compiles actual documents — cross references resolving from a reused `.aux`, a broken document reporting its log, a CJK document finding its fonts. Those tests **skip** when no engine is on `PATH`, which is why the `test-tex` target exists; the plain `test` target skips them just like a bare machine does.
+`tests/test_latex_engine.py` compiles actual documents — cross references resolving from a reused `.aux`, a broken document reporting its log, a CJK document finding its fonts. It skips when no engine is on `PATH`.
+
+`tests/test_ui.py` drives both editors in real Chromium, because nothing else in the suite can see layout: it checks that the AI pane is laid out identically on `/editor` and `/latex`, that the transcript is visible and the composer sits at the bottom, and that the divider drag and collapse behave the same on both. It skips unless a browser is installed. To run it outside Docker, fetch one once:
+
+```bash
+poetry run playwright install chromium
+```
+
+None of this reaches the deployed image: `runtime` copies its virtualenv from the `builder` stage, which installs `--only main`, so the dev group — pytest, Playwright and all — is never in it.
 
 ## Packaging as an Executable
 

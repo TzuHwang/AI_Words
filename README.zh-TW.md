@@ -211,7 +211,7 @@ poetry install          # 會一併安裝 dev 群組（pytest）
 poetry run pytest
 ```
 
-測試會把所有外部工具都打樁，因此不需要 AI 金鑰、LibreOffice 或 LaTeX 引擎。也可以用兩個 Docker target 在乾淨環境中執行：
+測試會把所有外部工具都打樁，因此不需要 AI 金鑰、LibreOffice、LaTeX 引擎或瀏覽器。需要這些的測試會**跳過**而不是失敗，所以直接跑 `pytest` 永遠是綠的。三個 Docker target 分別補上缺的那一塊：
 
 ```bash
 # 與上面相同的測試，跑在專案指定的 Python 版本上。
@@ -219,9 +219,20 @@ docker build --target test -t ai-words-test . && docker run --rm ai-words-test
 
 # 同上，另外具備真正的 LaTeX 引擎（xelatex + CJK 字型）。
 docker build --target test-tex -t ai-words-test-tex . && docker run --rm ai-words-test-tex
+
+# 同上，另外具備 Chromium，用於瀏覽器測試。
+docker build --target test-ui -t ai-words-test-ui . && docker run --rm ai-words-test-ui
 ```
 
-`tests/test_latex_engine.py` 會編譯真實文件——交叉引用是否從重用的 `.aux` 解析、壞掉的文件是否回報編譯日誌、CJK 文件是否找得到字型。這些測試在 `PATH` 上沒有引擎時會**跳過**，這正是 `test-tex` target 存在的理由；一般的 `test` target 跟沒裝引擎的機器一樣會跳過它們。
+`tests/test_latex_engine.py` 會編譯真實文件——交叉引用是否從重用的 `.aux` 解析、壞掉的文件是否回報編譯日誌、CJK 文件是否找得到字型。`PATH` 上沒有引擎時會跳過。
+
+`tests/test_ui.py` 用真正的 Chromium driving 兩個編輯器，因為測試套件裡沒有別的東西看得見版面：它檢查 `/editor` 與 `/latex` 的 AI 區版面完全一致、對話內容可見且輸入框位在底部、分隔條的拖曳與收合在兩頁行為相同。沒裝瀏覽器時會跳過。要在 Docker 之外執行，先抓一次瀏覽器：
+
+```bash
+poetry run playwright install chromium
+```
+
+這些都不會進到部署映像檔：`runtime` 是從 `builder` 階段複製 virtualenv，而該階段只跑 `--only main`，所以 dev 群組（pytest、Playwright 等）從來不在裡面。
 
 ## 打包成單一執行檔
 

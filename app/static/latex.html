@@ -38,25 +38,14 @@
       <!-- Divider -->
       <div id="divider"></div>
 
-      <!-- AI assistant (single conversation) -->
-      <section id="ai-pane">
-        <header class="pane-header ai-header">
-          <button data-act="toggle-ai" title="Collapse panel" class="icon-btn">⟩⟩</button>
-          <span class="ai-title">AI Assistant</span>
-          <select id="model-select" title="Active model"></select>
-        </header>
-        <div class="messages" id="messages"></div>
-        <div id="composer">
-          <textarea id="chat-input" rows="1"
-            placeholder="Ask about the LaTeX document…"></textarea>
-          <button id="send-btn" title="Send">➤</button>
-          <button id="stop-btn" title="Stop generating" hidden>■</button>
-        </div>
-      </section>
+      <!-- AI assistant — filled in by ai-pane.js, same as on /editor -->
+      <section id="ai-pane"></section>
     </div>
   </div>
 
   <input type="file" id="tex-file" accept=".tex,text/x-tex" hidden>
-  <script src="/static/latex.js?v=4"></script>
+  <script src="/static/ui.js?v=1"></script>
+  <script src="/static/ai-pane.js?v=1"></script>
+  <script src="/static/latex.js?v=5"></script>
 </body>
 </html>
