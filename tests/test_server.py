@@ -25,6 +25,35 @@ def test_index(client):
     assert "AI Words" in r.text
 
 
+def test_editor_and_latex_pages(client):
+    assert client.get("/editor").status_code == 200
+    r = client.get("/latex")
+    assert r.status_code == 200
+    assert "tex-source" in r.text
+
+
+# -- latex compile ----------------------------------------------------------
+def test_models_report_tex_availability(client):
+    assert "tex" in client.get("/api/models").json()
+
+
+def test_latex_render_without_engine(client, monkeypatch):
+    # No engine installed -> 422 with the error text for the UI to show.
+    monkeypatch.setattr("app.server.render_tex_to_pdf",
+                        lambda src: (None, "No LaTeX engine found."))
+    r = client.post("/api/latex/render", json={"source": "x"})
+    assert r.status_code == 422
+    assert "No LaTeX engine" in r.json()["error"]
+
+
+def test_latex_render_success(client, monkeypatch):
+    monkeypatch.setattr("app.server.render_tex_to_pdf", lambda src: (b"%PDF-1.5 fake", "log"))
+    r = client.post("/api/latex/render", json={"source": "hi"})
+    assert r.status_code == 200
+    assert r.content.startswith(b"%PDF")
+    assert r.headers["content-type"] == "application/pdf"
+
+
 # -- models -----------------------------------------------------------------
 def test_get_models(client):
     data = client.get("/api/models").json()
@@ -115,7 +144,7 @@ def test_import_rejects_unknown_type(client):
 
 # -- chat (SSE) -------------------------------------------------------------
 def test_chat_streams_sse(client, monkeypatch):
-    async def fake_stream(backend, messages, document_html, skill_prompt, selection_text):
+    async def fake_stream(backend, messages, document_html, skill_prompt, selection_text, mode):
         yield "Hello "
         yield "world"
 

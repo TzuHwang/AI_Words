@@ -68,6 +68,18 @@ ENV PYTHONUNBUFFERED=1 \
 #     && apt-get install -y --no-install-recommends libreoffice-writer \
 #     && rm -rf /var/lib/apt/lists/*
 
+# --- LaTeX engine for the /latex editor's PDF preview.
+#     xetex (not pdflatex) plus the CJK fonts so Traditional/Simplified Chinese
+#     documents compile — the app's font picker is CJK-first. Baked into the
+#     image so the preview works offline and out of the box; without it the
+#     LaTeX editor still runs but shows a "no compiler" notice. Drop the
+#     texlive-lang-chinese/fonts-noto-cjk packages if you don't need CJK.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+       texlive-xetex texlive-latex-recommended texlive-latex-extra \
+       texlive-lang-chinese fonts-noto-cjk \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN useradd --create-home --uid 1000 appuser \
     && mkdir -p /app /data/skills \
     && chown -R appuser:appuser /app /data

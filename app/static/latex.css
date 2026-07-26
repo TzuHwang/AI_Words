@@ -1,0 +1,63 @@
+/* LaTeX editor page. The AI pane (#ai-pane, .messages, #composer, .msg…) reuses
+   the shared styles in style.css; only the source/preview layout lives here. */
+
+#tex-app { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+
+/* Toolbar ---------------------------------------------------------------- */
+.tex-toolbar {
+  display: flex; align-items: center; gap: 4px;
+  padding: 5px 8px;
+  background: var(--lo-chrome); border-bottom: 1px solid var(--lo-chrome-border);
+  font-size: 13px;
+}
+.tex-btn {
+  font: inherit; font-size: 13px;
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 5px 10px; border-radius: 5px; cursor: pointer;
+  color: var(--text); background: transparent; border: 1px solid transparent;
+  text-decoration: none;
+}
+.tex-btn:hover { background: var(--lo-hover); border-color: var(--lo-hover-border); }
+.tex-compile { font-weight: 600; color: var(--accent); }
+.tex-ai-toggle.active { background: var(--lo-hover); border-color: var(--lo-hover-border); }
+.tex-home { font-size: 15px; }
+.tex-sep { width: 1px; align-self: stretch; margin: 3px 4px; background: var(--lo-chrome-border); }
+.tex-spacer { flex: 1; }
+.tex-auto { display: inline-flex; align-items: center; gap: 4px; color: var(--text-dim); }
+.tex-docname { color: var(--text-dim); }
+.tex-status { color: var(--text-dim); font-size: 12.5px; min-width: 80px; }
+.tex-status.error { color: var(--accent); }
+.tex-status.ok { color: #2e9e5b; }
+
+/* Main split ------------------------------------------------------------- */
+.tex-main { flex: 1; display: flex; min-height: 0; overflow: hidden; }
+
+.tex-editor { flex: 1 1 50%; min-width: 260px; display: flex; }
+#tex-source {
+  flex: 1; width: 100%; resize: none; border: 0; outline: none;
+  padding: 14px 16px;
+  font: 13.5px/1.6 "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  color: var(--text); background: var(--bg);
+  tab-size: 2;
+}
+
+.tex-vdiv { flex: none; width: 5px; background: var(--border); }
+
+.tex-preview {
+  flex: 1 1 50%; min-width: 260px; position: relative;
+  background: var(--lo-canvas); display: flex;
+}
+#tex-pdf { flex: 1; width: 100%; height: 100%; border: 0; background: var(--lo-canvas); }
+
+/* Compile log overlays the preview when a compile fails / a notice is shown. */
+.tex-log {
+  position: absolute; inset: 0; margin: 0; padding: 16px 18px;
+  overflow: auto; white-space: pre-wrap; word-break: break-word;
+  font: 12.5px/1.5 "SFMono-Regular", Consolas, monospace;
+  color: var(--text); background: var(--bg-alt);
+  border-top: 3px solid var(--accent);
+}
+.tex-log.notice { border-top-color: var(--border); color: var(--text-dim); }
+
+/* AI pane sits at the shared 420px; reuse its collapse rules from style.css. */
+.tex-main #ai-pane { flex: 0 0 380px; }

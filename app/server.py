@@ -17,10 +17,20 @@ from fastapi.staticfiles import StaticFiles
 from . import ai, skills
 from .config import ModelBackend, load_config, save_config
 from .converter import find_soffice, html_to_odt_bytes, odt_bytes_to_html
+from .latex import find_tex, render_tex_to_pdf
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 app = FastAPI(title="AI Words")
+
+
+def _page(name: str) -> FileResponse:
+    # Never cache an entry page, so the cache-busting query strings it points
+    # at (e.g. app.js?v=N) are always the current ones after a rebuild.
+    return FileResponse(
+        STATIC_DIR / name,
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -28,12 +38,17 @@ app = FastAPI(title="AI Words")
 # ---------------------------------------------------------------------------
 @app.get("/")
 async def index() -> FileResponse:
-    # Never cache the entry page, so the cache-busting query strings it points
-    # at (e.g. app.js?v=N) are always the current ones after a rebuild.
-    return FileResponse(
-        STATIC_DIR / "index.html",
-        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
-    )
+    return _page("launcher.html")   # format chooser
+
+
+@app.get("/editor")
+async def editor() -> FileResponse:
+    return _page("index.html")      # rich-text (ODT) editor
+
+
+@app.get("/latex")
+async def latex_editor() -> FileResponse:
+    return _page("latex.html")      # LaTeX source editor + PDF preview
 
 
 # ---------------------------------------------------------------------------
@@ -85,6 +100,21 @@ async def export_document(request: Request) -> Response:
 
 
 # ---------------------------------------------------------------------------
+# LaTeX compile
+# ---------------------------------------------------------------------------
+@app.post("/api/latex/render")
+async def latex_render(request: Request) -> Response:
+    body = await request.json()
+    source = body.get("source", "")
+    pdf, log = render_tex_to_pdf(source)
+    if pdf is None:
+        # 422: the request was well-formed but the source didn't compile (or no
+        # engine is installed). The log is returned for the UI to display.
+        return JSONResponse({"error": log}, status_code=422)
+    return Response(content=pdf, media_type="application/pdf")
+
+
+# ---------------------------------------------------------------------------
 # AI chat (SSE stream)
 # ---------------------------------------------------------------------------
 @app.post("/api/chat")
@@ -93,6 +123,7 @@ async def chat(request: Request) -> StreamingResponse:
     messages = body.get("messages", [])
     document_html = body.get("document_html", "")
     selection_text = body.get("selection_text", "")
+    mode = (body.get("mode") or "richtext").lower()
 
     cfg = load_config()
     backend = cfg.models.get(cfg.active_model)
@@ -103,7 +134,7 @@ async def chat(request: Request) -> StreamingResponse:
     async def event_stream():
         try:
             async for chunk in ai.stream_chat(
-                backend, messages, document_html, skill_prompt, selection_text
+                backend, messages, document_html, skill_prompt, selection_text, mode
             ):
                 yield f"data: {json.dumps({'delta': chunk})}\n\n"
             yield f"data: {json.dumps({'done': True})}\n\n"
@@ -142,6 +173,7 @@ async def get_models() -> JSONResponse:
                 for m in cfg.models.values()
             ],
             "soffice": bool(find_soffice()),
+            "tex": bool(find_tex()),
         }
     )
 

@@ -44,6 +44,18 @@ def test_system_prompt_omits_selection_when_empty():
     assert "<selection>" not in prompt
 
 
+def test_system_prompt_latex_mode_uses_latex_instructions():
+    tex = r"\documentclass{article}\begin{document}Hi\end{document}"
+    prompt = ai.build_system_prompt(tex, "", "", "latex")
+    assert "LaTeX editor" in prompt and ".tex source" in prompt
+    assert tex in prompt
+
+
+def test_system_prompt_default_mode_is_richtext():
+    prompt = ai.build_system_prompt("<p>x</p>", "")
+    assert "two-pane document editor" in prompt
+
+
 # -- stream_chat dispatch ---------------------------------------------------
 def test_stream_chat_routes_by_api_type(monkeypatch):
     async def fake_anthropic(backend, system, messages):

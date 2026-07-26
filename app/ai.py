@@ -64,13 +64,40 @@ br, a, table/tr/td. No <html>, <head>, <body>, <script>, or <style> tags.
 normally with NO document block.
 """
 
+LATEX_SYSTEM_PROMPT = """\
+You are the AI assistant inside AI Words, a LaTeX editor. The left pane holds the \
+.tex source and a compiled PDF preview; you are on the right. You help the user \
+read, analyze, and edit that LaTeX document.
+
+You will be given the current source as LaTeX inside <document>...</document>. \
+Treat it as the single source of truth for the document's current state.
+
+When the user asks you to change the document, reply with a short explanation of \
+what you changed, then emit the COMPLETE revised .tex source inside a fenced \
+block tagged `ai_words:document`, for example:
+
+```ai_words:document
+\\documentclass{article}
+\\begin{document}
+Revised body...
+\\end{document}
+```
+
+Rules for the document block:
+- Include the ENTIRE .tex source (preamble included), not just the changed part.
+- Emit valid LaTeX only — no HTML, no Markdown fences inside the block.
+- Emit at most one `ai_words:document` block per reply.
+- If the user is only asking a question (not requesting an edit), answer \
+normally with NO document block.
+"""
+
 MAX_TOKENS = 16000
 
 
 def build_system_prompt(
-    document_html: str, skill_prompt: str, selection_text: str = ""
+    document_html: str, skill_prompt: str, selection_text: str = "", mode: str = "richtext"
 ) -> str:
-    prompt = SYSTEM_PROMPT
+    prompt = LATEX_SYSTEM_PROMPT if mode == "latex" else SYSTEM_PROMPT
     if skill_prompt.strip():
         prompt += "\n\n# Loaded skills\n" + skill_prompt.strip()
     prompt += f"\n\n<document>\n{document_html}\n</document>"
@@ -90,9 +117,10 @@ async def stream_chat(
     document_html: str,
     skill_prompt: str = "",
     selection_text: str = "",
+    mode: str = "richtext",
 ) -> AsyncIterator[str]:
     """Yield text chunks from the model's streamed response."""
-    system = build_system_prompt(document_html, skill_prompt, selection_text)
+    system = build_system_prompt(document_html, skill_prompt, selection_text, mode)
     if backend.api_type == "anthropic":
         async for chunk in _stream_anthropic(backend, system, messages):
             yield chunk

@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI Words</title>
+  <link rel="stylesheet" href="/static/style.css?v=3">
+  <link rel="stylesheet" href="/static/launcher.css?v=1">
+</head>
+<body>
+  <main id="launcher">
+    <h1 class="lc-title">AI Words</h1>
+    <p class="lc-sub">Choose a document format to start, or open an existing file.</p>
+
+    <div class="lc-cards">
+      <a class="lc-card" href="/editor">
+        <span class="lc-icon">📄</span>
+        <span class="lc-name">Rich Text</span>
+        <span class="lc-desc">Word-processor document (.odt / .html)</span>
+      </a>
+      <a class="lc-card" href="/latex">
+        <span class="lc-icon">∑</span>
+        <span class="lc-name">LaTeX</span>
+        <span class="lc-desc">Typeset source with PDF preview (.tex)</span>
+      </a>
+    </div>
+
+    <div class="lc-or"><span>or</span></div>
+
+    <button id="lc-open" class="lc-open">📂 Open an existing file…</button>
+    <input type="file" id="lc-file" accept=".odt,.html,.htm,.tex" hidden>
+    <p id="lc-error" class="lc-error" hidden></p>
+  </main>
+
+  <script src="/static/launcher.js?v=1"></script>
+</body>
+</html>

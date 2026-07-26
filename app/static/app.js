@@ -244,6 +244,7 @@ document.addEventListener("click", (e) => {
   const act = e.target.closest("[data-act]")?.dataset.act;
   if (!act) { closeMenus(); return; }
   switch (act) {
+    case "home": location.href = "/"; break;
     case "open": openDoc(); break;
     case "save": saveToFile(); break;
     case "save-menu": {
@@ -292,6 +293,23 @@ async function insertTable() {
 async function insertLink() {
   const url = await uiPrompt("Link URL:", "https://");
   if (url) exec("createLink", url);
+}
+
+// Load a document handed off from the launcher (see launcher.js). It stashed
+// already-converted HTML in sessionStorage; consume and clear it once. There's
+// no writable file handle across the navigation, so Ctrl+S will Save-As.
+function consumeHandoff() {
+  const raw = sessionStorage.getItem("aiwords.pending");
+  if (!raw) return;
+  sessionStorage.removeItem("aiwords.pending");
+  let pending;
+  try { pending = JSON.parse(raw); } catch (_) { return; }
+  if (!pending || pending.mode !== "richtext") return;
+  editor.innerHTML = pending.content || "<p><br></p>";
+  docName = (pending.filename || "Untitled").replace(/\.[^.]+$/, "");
+  docNameEl.textContent = pending.filename || docName;
+  updateWordCount();
+  schedulePaginate();
 }
 
 // Send a File's bytes through the server converter and load the result.
@@ -1324,6 +1342,7 @@ editor.addEventListener("keydown", (e) => {
 // ---------------------------------------------------------------------------
 // Init
 // ---------------------------------------------------------------------------
+consumeHandoff();
 loadModels();
 updateWordCount();
 paginate();

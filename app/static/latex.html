@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI Words — LaTeX</title>
+  <link rel="stylesheet" href="/static/style.css?v=3">
+  <link rel="stylesheet" href="/static/latex.css?v=1">
+</head>
+<body>
+  <div id="tex-app">
+    <!-- Toolbar -->
+    <div class="tex-toolbar">
+      <a href="/" class="tex-btn tex-home" title="Home">🏠</a>
+      <button class="tex-btn" data-act="new">New</button>
+      <button class="tex-btn" data-act="open">Open…</button>
+      <button class="tex-btn" data-act="save" title="Save (Ctrl+S)">Save</button>
+      <span class="tex-sep"></span>
+      <button class="tex-btn tex-compile" id="compile-btn" data-act="compile">▶ Compile</button>
+      <label class="tex-auto"><input type="checkbox" id="auto-compile" checked> Auto</label>
+      <span id="tex-status" class="tex-status"></span>
+      <span class="tex-spacer"></span>
+      <span id="doc-name" class="tex-docname">untitled.tex</span>
+      <button class="tex-btn tex-ai-toggle active" data-act="toggle-ai" id="toggle-ai"
+        title="Show / hide AI assistant">🗨 AI</button>
+    </div>
+
+    <!-- Main: source | PDF | AI -->
+    <div class="tex-main">
+      <section class="tex-editor">
+        <textarea id="tex-source" spellcheck="false"
+          placeholder="Type LaTeX here…"></textarea>
+      </section>
+
+      <div class="tex-vdiv"></div>
+
+      <section class="tex-preview">
+        <iframe id="tex-pdf" title="PDF preview"></iframe>
+        <div id="tex-log" class="tex-log" hidden></div>
+      </section>
+
+      <!-- AI assistant (single conversation) -->
+      <section id="ai-pane">
+        <header class="pane-header ai-header">
+          <button data-act="toggle-ai" title="Collapse panel" class="icon-btn">⟩⟩</button>
+          <span class="ai-title">AI Assistant</span>
+          <select id="model-select" title="Active model"></select>
+        </header>
+        <div class="messages" id="messages"></div>
+        <div id="composer">
+          <textarea id="chat-input" rows="1"
+            placeholder="Ask about the LaTeX document…"></textarea>
+          <button id="send-btn" title="Send">➤</button>
+          <button id="stop-btn" title="Stop generating" hidden>■</button>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <input type="file" id="tex-file" accept=".tex,text/x-tex" hidden>
+  <script src="/static/latex.js?v=1"></script>
+</body>
+</html>
