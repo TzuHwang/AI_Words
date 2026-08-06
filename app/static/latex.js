@@ -8,6 +8,7 @@
 
 // $ and the AI pane itself come from ui.js / ai-pane.js, loaded first.
 const source = $("#tex-source");
+const backdrop = $("#tex-backdrop");
 const logEl = $("#tex-log");
 const statusEl = $("#tex-status");
 const docNameEl = $("#doc-name");
@@ -150,6 +151,37 @@ document.addEventListener("click", (e) => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// AI-focus marker
+//
+// What the assistant is asked to focus on is whatever the source has selected
+// (see getSelection below). The selection itself survives — a textarea keeps
+// selectionStart/End when it loses focus — but the browser stops drawing it, so
+// clicking into the chat would leave the user with no idea what they had
+// picked. This paints it back onto the backdrop while focus is elsewhere.
+// ---------------------------------------------------------------------------
+function showFocusMark() {
+  const { selectionStart: start, selectionEnd: end, value } = source;
+  if (start === end) { hideFocusMark(); return; }
+  backdrop.innerHTML =
+    escapeHtml(value.slice(0, start)) +
+    `<mark>${escapeHtml(value.slice(start, end))}</mark>` +
+    escapeHtml(value.slice(end));
+  // A scrollbar narrows the textarea's text but not the backdrop's, which would
+  // wrap the lines differently and slide the marker off the words it belongs to.
+  backdrop.style.width = source.clientWidth + "px";
+  backdrop.hidden = false;
+  backdrop.scrollTop = source.scrollTop;
+}
+
+function hideFocusMark() {
+  backdrop.hidden = true;
+}
+
+source.addEventListener("blur", showFocusMark);
+source.addEventListener("focus", hideFocusMark);
+source.addEventListener("scroll", () => { backdrop.scrollTop = source.scrollTop; });
+
 // Tab inserts two spaces instead of moving focus out of the source box.
 source.addEventListener("keydown", (e) => {
   if (e.key === "Tab") {
@@ -167,8 +199,21 @@ async function newDoc() {
 
 function setSource(text, name) {
   source.value = text;
+  hideFocusMark();                 // the marked passage is gone with the old text
   if (name) { docName = name; docNameEl.textContent = name; }
   if (texAvailable) compile();
+}
+
+// Swap the whole document the way a paste would. Assigning `.value` instead
+// would wipe the textarea's native undo stack, leaving Ctrl+Z with nothing to
+// undo — which matters when the new text came from the AI and the user wants
+// their own back.
+function replaceSource(text) {
+  source.focus();
+  source.select();
+  if (!document.execCommand("insertText", false, text)) source.value = text;
+  source.setSelectionRange(0, 0);
+  source.scrollTop = 0;
 }
 
 // -- open (.tex) ------------------------------------------------------------
@@ -254,6 +299,10 @@ const aiReady = AiPane.init({
   mode: "latex",
   placeholder: "Ask about the LaTeX document, or /help for commands…",
   getDocument: () => source.value,
+  // A textarea keeps selectionStart/End after it loses focus, so the passage
+  // the user highlighted is still readable once they have moved to the chat
+  // box — no need to mirror it the way the rich-text editor has to.
+  getSelection: () => source.value.slice(source.selectionStart, source.selectionEnd).trim(),
   proposal: {
     title: "Proposed LaTeX source",
     applyLabel: "Apply to editor",
@@ -265,7 +314,8 @@ const aiReady = AiPane.init({
       return pre;
     },
     apply: (doc) => {
-      source.value = doc;
+      replaceSource(doc);
+      hideFocusMark();
       if (texAvailable) compile();
     },
   },

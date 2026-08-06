@@ -71,6 +71,12 @@ CMD ["python", "-m", "pytest", "-q"]
 # still runs but shows a "no compiler" notice. Drop the texlive-lang-chinese /
 # fonts-noto-cjk packages if you don't need CJK.
 #
+# texlive-fonts-recommended is listed explicitly because nothing here *depends*
+# on it — it is a Recommends of texlive-latex-extra, which --no-install-recommends
+# drops. It carries the psnfss metrics, and hyperref's XeTeX branch loads one of
+# them (pzdr.tfm, ZapfDingbats) unconditionally — so without it any document
+# using hyperref dies with "Font \XeTeXLink@font=pzdr ... not loadable".
+#
 # XeTeX resolves fonts through fontconfig, and scanning the CJK families is slow
 # enough to dominate a first compile. `fc-cache -fs` builds the *system* cache
 # (/var/cache/fontconfig) at build time so it ships inside the image: the app
@@ -82,6 +88,7 @@ FROM python:3.14-slim AS texlive
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
        texlive-xetex texlive-latex-recommended texlive-latex-extra \
+       texlive-fonts-recommended \
        texlive-lang-chinese fonts-noto-cjk fontconfig \
     && fc-cache -fs \
     && rm -rf /var/lib/apt/lists/*

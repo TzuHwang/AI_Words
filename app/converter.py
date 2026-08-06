@@ -324,7 +324,8 @@ def _extract_body(full_html: str) -> str:
 # HTML -> ODT (pure python)
 # ---------------------------------------------------------------------------
 
-_BLOCK_TAGS = {"p", "h1", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "li", "table", "tr", "td", "div"}
+_BLOCK_TAGS = {"p", "h1", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "li",
+               "table", "tr", "td", "div"}
 _INLINE_FORMAT_TAGS = {
     "strong": _BOLD,
     "b": _BOLD,

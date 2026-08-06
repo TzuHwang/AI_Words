@@ -1,0 +1,9 @@
+[flake8]
+# Pins this repo's lint rules so they don't depend on a config file found in a
+# parent directory outside the repo.
+max-line-length = 100
+# extend-ignore (not ignore) keeps flake8's default ignore list, which includes
+# W503 — PEP 8 recommends breaking *before* a binary operator, and W503/W504
+# are mutually exclusive, so the default set must stay intact.
+extend-ignore = E203, W503
+exclude = .git,__pycache__,build,dist

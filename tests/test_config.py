@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import json
-
 from app import config
 from app.config import AppConfig, ModelBackend
 
