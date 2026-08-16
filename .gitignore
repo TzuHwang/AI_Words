@@ -3,6 +3,7 @@ config.json
 
 # User skills (keep the directory, ignore the skill files)
 skills/*.md
+ARCHITECTURE.zh-TW.md
 
 # Python
 __pycache__/

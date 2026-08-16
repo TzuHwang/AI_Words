@@ -695,6 +695,18 @@ AiPane.init({
       el.innerHTML = doc;
       return el;
     },
+    // A block here is one top-level element of the document body — the unit the
+    // pane walks the user through when reviewing a proposal. Whitespace between
+    // block elements carries no meaning in HTML, so rejoining with newlines
+    // gives back an equivalent document.
+    splitBlocks: (doc) => {
+      const holder = document.createElement("div");
+      holder.innerHTML = doc;
+      return [...holder.childNodes]
+        .map((n) => (n.nodeType === 1 ? n.outerHTML : n.textContent.trim()))
+        .filter(Boolean);
+    },
+    joinBlocks: (blocks) => blocks.join("\n"),
     apply: replaceEditorContent,
   },
 });

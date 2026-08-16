@@ -20,6 +20,7 @@ Skipped unless pytest-playwright and a browser are installed. To run them:
 
 from __future__ import annotations
 
+import json
 import socket
 import threading
 import time
@@ -77,7 +78,8 @@ def live_server(tmp_path_factory):
     port = sock.getsockname()[1]
     sock.close()
 
-    uv = uvicorn.Server(uvicorn.Config(server.app, host="127.0.0.1", port=port, log_level="warning"))
+    uv = uvicorn.Server(uvicorn.Config(server.app, host="127.0.0.1", port=port,
+                                       log_level="warning"))
     thread = threading.Thread(target=uv.run, daemon=True)
     thread.start()
 
@@ -178,7 +180,8 @@ def test_transcript_is_visible_and_fills_the_pane(open_page, path):
 @pytest.mark.parametrize("path", PAGES)
 def test_greeting_is_shown(open_page, path):
     page = open_page(path)
-    expect(page.locator("#tab-panels .messages.active .msg.system")).to_contain_text("Assistant ready")
+    greeting = page.locator("#tab-panels .messages.active .msg.system")
+    expect(greeting).to_contain_text("Assistant ready")
 
 
 def test_both_editors_lay_the_pane_out_identically(open_page):
@@ -289,6 +292,276 @@ def test_new_tab_opens_its_own_transcript(open_page, path):
 
     page.locator("#tab-list .tab").first.click()   # back to the first chat
     expect(page.locator("#tab-panels .messages.active")).to_contain_text("Assistant ready")
+
+
+@pytest.mark.parametrize("path", PAGES)
+def test_the_editor_selection_is_sent_as_focus_context(open_page, path):
+    """Highlighting a passage aims the assistant at it.
+
+    The selection has to survive focus moving to the chat box, which is what
+    made this stop working on /latex: the page passed no `getSelection` hook at
+    all, so the LaTeX editor sent nothing however much the user had picked out.
+    """
+    page = open_page(path)
+    sent = []
+
+    def capture(route):
+        sent.append(route.request.post_data_json)
+        route.fulfill(status=200, content_type="text/event-stream",
+                      body='data: {"delta": "done"}\n\n')
+
+    page.route("**/api/chat", capture)
+
+    doc = "#editor" if path == "/editor" else "#tex-source"
+    page.fill(doc, "the picked words")
+    page.click(doc)
+    page.keyboard.press("Control+a")
+    # selectionchange is delivered on a later turn of the event loop, and the
+    # ODT editor only remembers a selection it has been told about. A real user
+    # cannot select and start typing within the same frame; the browser driver
+    # can, so give the event somewhere to land.
+    page.wait_for_timeout(100)
+
+    page.fill("#chat-input", "what does this mean?")   # focus leaves the document
+    page.click("#send-btn")
+    expect(page.locator("#tab-panels .messages.active")).to_contain_text("done")
+
+    assert "picked words" in sent[0]["selection_text"]
+
+
+def test_latex_keeps_the_selection_visible_after_focus_leaves(open_page):
+    """The marker has to appear when the chat box steals the highlight…"""
+    page = open_page("/latex")
+    page.fill("#tex-source", "keep me marked")
+    page.click("#tex-source")
+    page.keyboard.press("Control+a")
+    expect(page.locator("#tex-backdrop")).to_be_hidden()   # the textarea draws it
+
+    page.click("#chat-input")
+    marker = page.locator("#tex-backdrop mark")
+    expect(marker).to_be_visible()
+    expect(marker).to_have_text("keep me marked")
+
+    # …and lie exactly over the words it marks, which is only true while the
+    # backdrop and the source lay their text out identically.
+    assert marker.bounding_box()["x"] == pytest.approx(
+        box(page, "#tex-source")["x"] + 16, abs=1)   # the source's left padding
+
+    page.click("#tex-source")                       # back to the native highlight
+    expect(page.locator("#tex-backdrop")).to_be_hidden()
+
+
+def test_latex_drops_the_marker_when_the_text_it_marks_is_replaced(open_page):
+    page = open_page("/latex")
+    page.fill("#tex-source", "keep me marked")
+    page.click("#tex-source")
+    page.keyboard.press("Control+a")
+    page.click("#chat-input")
+    expect(page.locator("#tex-backdrop mark")).to_be_visible()
+
+    page.on("dialog", lambda dialog: dialog.accept())
+    page.click('[data-act="new"]')
+    expect(page.locator("#tex-backdrop")).to_be_hidden()
+
+
+def test_latex_applying_a_suggestion_can_be_undone(open_page):
+    """Ctrl+Z after "Apply to editor" has to bring the user's own text back.
+
+    Applying used to assign `source.value`, which empties the textarea's native
+    undo stack — so the one moment a user most wants Ctrl+Z, it did nothing.
+    The test types its text rather than filling it, since `fill` replaces the
+    value the same way and would leave nothing to undo either.
+    """
+    page = open_page("/latex")
+    page.click("#tex-source")
+    page.keyboard.press("Control+a")
+    page.keyboard.type("my own words")
+
+    page.evaluate("() => replaceSource('what the AI proposed')")   # what apply() calls
+    expect(page.locator("#tex-source")).to_have_value("what the AI proposed")
+
+    page.keyboard.press("Control+z")
+    expect(page.locator("#tex-source")).to_have_value("my own words")
+
+
+# ---------------------------------------------------------------------------
+# Reviewing a proposed document
+#
+# The assistant answers with the whole document however small the edit, so the
+# pane diffs it against the editor and walks the user through the changed blocks
+# one at a time. These drive that with a stubbed model reply, in both editors —
+# what a "block" is differs (an HTML element vs. a TeX paragraph) but the review
+# must not.
+# ---------------------------------------------------------------------------
+def as_document(path, paragraphs):
+    if path == "/editor":
+        return "".join(f"<p>{p}</p>" for p in paragraphs)
+    return "\n\n".join(paragraphs)
+
+
+def seed_document(page, path, paragraphs):
+    if path == "/editor":
+        page.evaluate("(html) => { document.querySelector('#editor').innerHTML = html; }",
+                      as_document(path, paragraphs))
+    else:
+        page.fill("#tex-source", as_document(path, paragraphs))
+
+
+def document_text(page, path):
+    if path == "/editor":
+        return page.locator("#editor").inner_text()
+    return page.input_value("#tex-source")
+
+
+def propose_document(page, doc, note="Here is the revision."):
+    """Stub the model into answering with `doc` as the whole document."""
+    reply = f"{note}\n\n```ai_words:document\n{doc}\n```"
+    page.route("**/api/chat", lambda route: route.fulfill(
+        status=200, content_type="text/event-stream",
+        body="data: " + json.dumps({"delta": reply}) + "\n\n"))
+    page.fill("#chat-input", "revise it")
+    page.click("#send-btn")
+
+
+def propose(page, path, paragraphs, note="Here is the revision."):
+    propose_document(page, as_document(path, paragraphs), note)
+
+
+@pytest.mark.parametrize("path", PAGES)
+def test_only_the_changed_block_is_shown(open_page, path):
+    """The whole point: a one-paragraph edit is not a whole-document review."""
+    page = open_page(path)
+    seed_document(page, path, ["alpha", "bravo", "charlie"])
+    propose(page, path, ["alpha", "delta", "charlie"])
+
+    card = page.locator(".doc-proposal")
+    expect(card.locator(".dp-head")).to_contain_text("change 1 of 1")
+    expect(card.locator(".dp-old")).to_contain_text("bravo")
+    expect(card.locator(".dp-new")).to_contain_text("delta")
+    # The blocks that did not change stay out of it.
+    expect(card).not_to_contain_text("alpha")
+    expect(card).not_to_contain_text("charlie")
+
+
+@pytest.mark.parametrize("path", PAGES)
+def test_changes_are_asked_about_one_at_a_time(open_page, path):
+    page = open_page(path)
+    seed_document(page, path, ["alpha", "bravo", "charlie"])
+    propose(page, path, ["ALPHA", "bravo", "CHARLIE"])
+
+    card = page.locator(".doc-proposal")
+    expect(card.locator(".dp-head")).to_contain_text("change 1 of 2")
+    expect(card.locator(".dp-new")).to_contain_text("ALPHA")
+    expect(card).not_to_contain_text("CHARLIE")   # the second one waits its turn
+
+    card.locator(".accept-btn").click()
+    expect(card.locator(".dp-head")).to_contain_text("change 2 of 2")
+    expect(card.locator(".dp-new")).to_contain_text("CHARLIE")
+    expect(card).not_to_contain_text("ALPHA")
+
+    card.locator(".accept-btn").click()
+    expect(card.locator(".dp-head")).to_contain_text("2 of 2 changes accepted")
+    expect(card.locator(".dp-actions")).to_have_count(0)
+
+
+@pytest.mark.parametrize("path", PAGES)
+def test_accepting_every_change_applies_the_whole_proposal(open_page, path):
+    page = open_page(path)
+    seed_document(page, path, ["alpha", "bravo", "charlie"])
+    propose(page, path, ["ALPHA", "bravo", "CHARLIE"])
+
+    card = page.locator(".doc-proposal")
+    card.locator(".accept-btn").click()
+    card.locator(".accept-btn").click()
+    card.locator(".dp-head .apply-btn").click()
+
+    text = document_text(page, path)
+    assert "ALPHA" in text and "CHARLIE" in text and "bravo" in text
+    assert "alpha" not in text and "charlie" not in text
+
+
+@pytest.mark.parametrize("path", PAGES)
+def test_a_skipped_change_is_left_out_of_what_is_applied(open_page, path):
+    page = open_page(path)
+    seed_document(page, path, ["alpha", "bravo", "charlie"])
+    propose(page, path, ["ALPHA", "bravo", "CHARLIE"])
+
+    card = page.locator(".doc-proposal")
+    card.locator(".accept-btn").click()   # take the first
+    card.locator(".skip-btn").click()     # leave the second
+    expect(card.locator(".dp-head")).to_contain_text("1 of 2 changes accepted")
+    card.locator(".dp-head .apply-btn").click()
+
+    text = document_text(page, path)
+    assert "ALPHA" in text and "charlie" in text
+    assert "CHARLIE" not in text
+
+
+@pytest.mark.parametrize("path", PAGES)
+def test_skipping_everything_offers_nothing_to_apply(open_page, path):
+    page = open_page(path)
+    seed_document(page, path, ["alpha", "bravo", "charlie"])
+    propose(page, path, ["ALPHA", "bravo", "CHARLIE"])
+
+    card = page.locator(".doc-proposal")
+    card.locator(".skip-btn").click()
+    card.locator(".skip-btn").click()
+    expect(card.locator(".dp-head")).to_contain_text("0 of 2 changes accepted")
+    expect(card.locator(".apply-btn")).to_have_count(0)
+    assert "alpha" in document_text(page, path)
+
+
+@pytest.mark.parametrize("path", PAGES)
+def test_a_proposal_identical_to_the_document_says_so(open_page, path):
+    """Models re-emit the document unchanged often enough to be worth saying."""
+    page = open_page(path)
+    seed_document(page, path, ["alpha", "bravo", "charlie"])
+    propose(page, path, ["alpha", "bravo", "charlie"])
+
+    card = page.locator(".doc-proposal")
+    expect(card.locator(".dp-head")).to_contain_text("nothing changed")
+    expect(card.locator(".apply-btn")).to_have_count(0)
+
+
+@pytest.mark.parametrize("path", PAGES)
+def test_an_added_block_says_there_was_nothing_there(open_page, path):
+    """Both sides are always drawn: with the "now" side missing entirely, an
+    addition was indistinguishable from a rewrite."""
+    page = open_page(path)
+    seed_document(page, path, ["alpha", "bravo"])
+    propose(page, path, ["alpha", "bravo", "charlie"])
+
+    card = page.locator(".doc-proposal")
+    expect(card.locator(".dp-old")).to_contain_text("Nothing here yet")
+    expect(card.locator(".dp-new")).to_contain_text("charlie")
+
+
+def test_a_dropped_blank_paragraph_is_described_rather_than_shown_blank(open_page):
+    """The bug this pair of placeholders was written for.
+
+    A rich-text document is full of `<p><br></p>` spacers, and a model that
+    reflows one produced a card with an empty "now" box and no "proposed" side
+    at all — which tells the user nothing about what they are accepting.
+    """
+    page = open_page("/editor")
+    page.evaluate("(h) => { document.querySelector('#editor').innerHTML = h; }",
+                  "<p>alpha</p><p><br></p><p>bravo</p>")
+    propose_document(page, "<p>alpha</p><p>bravo</p>")
+
+    card = page.locator(".doc-proposal")
+    expect(card.locator(".dp-old")).to_contain_text("A blank paragraph")
+    expect(card.locator(".dp-new")).to_contain_text("Removed")
+
+
+@pytest.mark.parametrize("path", PAGES)
+def test_a_reworded_document_is_still_reviewed_paragraph_by_paragraph(open_page, path):
+    """"Polish the whole thing" changes every block, and must not collapse back
+    into one all-or-nothing review of the entire document."""
+    page = open_page(path)
+    seed_document(page, path, ["alpha", "bravo", "charlie"])
+    propose(page, path, ["ALPHA", "BRAVO", "CHARLIE"])
+
+    expect(page.locator(".doc-proposal .dp-head")).to_contain_text("change 1 of 3")
 
 
 @pytest.mark.parametrize("path", PAGES)

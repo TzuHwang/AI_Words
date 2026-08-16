@@ -2,8 +2,8 @@
 
 **English** · [繁體中文](README.zh-TW.md)
 
-> A LibreOffice-style ODT document editor with a streaming AI assistant built into the right pane.
-> Open a document, edit it directly in the browser (with or without AI help), and export it back to a file when you're done.
+> A document editor with a streaming AI assistant built into the right pane: LibreOffice-style rich text for `.odt`, and a LaTeX source editor with a live PDF preview for `.tex`.
+> Open a document, edit it directly in the browser (with or without AI help), and export or compile it when you're done.
 
 <p>
   <img alt="Python" src="https://img.shields.io/badge/python-3.10%2B-blue">
@@ -32,18 +32,21 @@
 
 ## Introduction
 
-**AI Words** is a standalone, runnable desktop application. On launch it opens a web page in your browser, split into two panes:
+**AI Words** is a standalone, runnable desktop application. On launch it opens a web page in your browser: a launcher that hands an opened file to whichever editor suits it, chosen by extension.
 
-- **Left — Document editor:** a rich-text editing area modeled on the Word / LibreOffice writing experience.
-- **Right — AI assistant:** a command-driven chat interface for driving edits, inspired by *Claude Code for VS Code*.
+- **Rich text** (`/editor`) — an editing area modeled on the Word / LibreOffice writing experience, for `.odt` and `.html`.
+- **LaTeX** (`/latex`) — a `.tex` source pane that compiles on the server and previews the PDF in its own browser tab.
+- **AI assistant** — the same streaming, command-driven chat pane down the right of both, inspired by *Claude Code for VS Code*.
 
-The core document pipeline has three steps:
+The rich-text pipeline has three steps:
 
 1. **Import:** load an ODT file and render it to HTML for display and editing.
 2. **Edit:** the user (and/or the AI assistant) modifies the HTML content in the browser.
 3. **Export:** on save, serialize the edited HTML back to ODT (or other formats).
 
-The goal is to let you open a document, edit it directly in the browser (with or without AI assistance), and export the result back to a file when finished.
+LaTeX skips the conversion entirely — the source *is* the document, and an installed engine turns it into the PDF you preview. That engine is optional: without one the editor and the assistant still work, you just don't get a preview.
+
+The goal is to let you open a document, edit it directly in the browser (with or without AI assistance), and export or compile the result when finished.
 
 ODT conversion is pure-Python (`odfpy`) by default; if a LibreOffice `soffice` binary is found on the system, it is used automatically for higher-fidelity conversion.
 
@@ -55,10 +58,12 @@ The right-pane assistant's interaction style follows *Claude Code for VS Code*: 
 
 ## Features
 
-- 🖥️ **Single-executable launch** — starts and opens the two-pane editor in your browser.
+- 🖥️ **Single-executable launch** — starts and opens the editor in your browser.
+- 🚦 **Two editors, one launcher** — rich text for `.odt`, LaTeX for `.tex`; opening a file routes by extension.
 - 📄 **ODT ⇄ HTML** — import ODT rendered to editable HTML, export back to ODT / HTML on save.
 - ✍️ **Rich-text editing** — bold / italic / underline, headings, and lists via the toolbar.
-- 🤖 **Streaming AI assistant** — supports the Anthropic API and any OpenAI-compatible local server (Ollama, LM Studio, …).
+- 📐 **LaTeX with a live PDF preview** — auto-compiles as you type via an installed engine (tectonic, xelatex, …) and redraws the PDF in its own tab without losing your place. Optional: without an engine the editor still runs.
+- 🤖 **Streaming AI assistant** — the same pane in both editors; supports the Anthropic API and any OpenAI-compatible local server (Ollama, LM Studio, …).
 - 🔀 **Model switching** — switch local/cloud models live from a dropdown or with `/model <id>`.
 - 🧩 **Skills** — create and load reusable instruction / tool bundles.
 - 🧠 **Reasoning-model support** — `<think>…</think>` reasoning is stripped from the chat display automatically.
@@ -68,8 +73,9 @@ The right-pane assistant's interaction style follows *Claude Code for VS Code*: 
 ```text
 AI_Words/
 ├── run.py                  # Convenience launcher: python run.py (same as python -m app)
+├── run.sh                  # Build the Docker image and start the app in a container
 ├── pyproject.toml          # Poetry project config & dependencies
-├── Dockerfile              # Slim, pure-Python image (no LibreOffice)
+├── Dockerfile              # Runtime image, plus test / test-tex / test-ui targets
 ├── config.json             # Created on first run: model backends & active selections
 ├── LICENSE
 │
@@ -77,16 +83,25 @@ AI_Words/
 │   ├── __main__.py         # CLI entry point: parse args, start uvicorn, open browser
 │   ├── server.py           # FastAPI: pages + JSON/SSE API
 │   ├── converter.py        # ODT ⇄ HTML (odfpy; optional LibreOffice)
+│   ├── latex.py            # .tex → PDF via an installed LaTeX engine (optional)
 │   ├── ai.py               # Streaming chat (Anthropic + OpenAI-compatible backends)
 │   ├── config.py           # Model backends & active-selection management
 │   ├── skills.py           # Skill storage/loading (skills/*.md)
-│   └── static/             # Two-pane web UI
-│       ├── index.html
-│       ├── style.css
-│       └── app.js
+│   └── static/             # Web UI — one page per editor, one shared assistant
+│       ├── launcher.html   # Landing page at /          (+ launcher.css/.js)
+│       ├── index.html      # Rich-text editor at /editor (+ app.js)
+│       ├── latex.html      # LaTeX editor at /latex      (+ latex.css/.js)
+│       ├── pdfview.html    # PDF preview tab             (+ pdfview.css/.js)
+│       ├── ai-pane.js      # The AI assistant pane, shared by both editors
+│       ├── ui.js           # $, escapeHtml, and the in-page dialogs
+│       ├── style.css       # Shared chrome
+│       └── vendor/         # pdf.js (Apache-2.0), vendored to work offline
 │
-└── skills/                 # Skill definitions (Markdown)
-    └── language-consistency.md
+├── skills/                 # Skill definitions (Markdown)
+│   ├── incremental-edits.md
+│   └── language-consistency.md
+│
+└── tests/                  # pytest; the browser tests live in test_ui.py
 ```
 
 **Data-flow overview:**
@@ -97,6 +112,7 @@ Browser UI (app/static)
       ▼
 FastAPI (app/server.py)
       ├── converter.py  ── ODT ⇄ HTML
+      ├── latex.py      ── .tex → PDF
       ├── ai.py         ── streams to Anthropic / local models
       ├── config.py     ── reads/writes config.json
       └── skills.py     ── reads skills/*.md
@@ -157,7 +173,7 @@ poetry run ai-words --reload        # auto-reload on source changes (development
 
 ### Run with Docker (alternative)
 
-The image runs the pure-Python build (no LibreOffice), so it stays slim:
+The image bakes in a LaTeX engine and CJK fonts so the PDF preview works out of the box, but leaves out LibreOffice — ODT conversion falls back to pure Python — which keeps it under 1 GB:
 
 ```bash
 docker build -t ai-words .
@@ -190,7 +206,7 @@ If no API key is set, the app automatically selects a reachable local model so i
 
 - **Open** an `.odt` (or `.html`) file from the toolbar → it renders into the editor.
 - **Edit** directly in the left pane; use the toolbar for bold/italic/underline, headings, and lists.
-- **Ask the assistant** (right pane) to read or edit the document. When it proposes a change it returns the full revised document; click **Apply to document** to accept it.
+- **Ask the assistant** (right pane) to read or edit the document. It answers with the full revised document, but the pane diffs that against your document and asks about one changed paragraph at a time — **Accept** or **Skip** each, then apply what you kept.
 - **Save** as ODT or HTML from the Save menu.
 
 Assistant slash commands:
@@ -299,7 +315,8 @@ pyinstaller --onefile --add-data "app/static:app/static" --name ai_words run.py
 - [x] AI chat interface with model switching (local + API backends)
 - [x] Skill creation and loading
 - [x] Agent-driven document read/edit (propose-and-apply)
-- [ ] **LaTeX export/write support (WIP):** let documents be exported / written to LaTeX format.
+- [x] LaTeX editor: write `.tex`, compile it server-side, and preview the PDF
+- [ ] **LaTeX export:** convert an open ODT / HTML document into `.tex`. The editor above authors LaTeX directly; there is no conversion from a rich-text document yet.
 - [ ] Higher-fidelity ODT conversion (images, styles, nested lists)
 - [ ] Live / tool-based editing instead of full-document replacement
 - [ ] **Real agent harness (WIP):** an agentic tool-use loop — define `read_document` / `apply_edit` tools, let the model call them, execute them server-side, and feed results back so the model can iterate multi-step. Today the assistant is single-turn propose-and-apply (the user manually accepts a full-document rewrite), so it's a chat orchestration layer, not yet a true agent harness.

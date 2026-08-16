@@ -389,25 +389,198 @@ const AiPane = (() => {
       ? `<div class="reasoned">💭 Reasoned for ${fmtSecs(state.reasonedMs || 0)}</div>`
       : "";
     bubble.innerHTML = head + renderMarkdown(text);
-    if (doc == null) return;
+    if (doc != null) reviewProposal(msg, doc);
+  }
 
+  // -------------------------------------------------------------------------
+  // Reviewing a proposal, one changed block at a time
+  // -------------------------------------------------------------------------
+  // The model always sends the whole document back, and the pane used to show
+  // the whole thing — which is no way to judge a two-word fix buried in ten
+  // paragraphs. So the proposal is diffed against what is in the editor now,
+  // and only the blocks that actually changed are shown, one at a time: accept
+  // or skip this one, then the next appears. Nothing reaches the document until
+  // every change has been answered.
+  //
+  // What a "block" is differs per editor (an HTML element vs. a LaTeX
+  // paragraph), so splitting and rejoining come from the page via
+  // hooks.proposal.
+
+  // Blocks are matched on their text with runs of whitespace flattened, so a
+  // model that echoes an untouched paragraph with different indentation is not
+  // read as having rewritten it.
+  const blockKey = (s) => s.replace(/\s+/g, " ").trim();
+
+  // The indices at which two block lists agree — a longest common subsequence,
+  // which is what makes everything between two agreements a changed region.
+  function commonPairs(a, b) {
+    const n = a.length, m = b.length;
+    const len = Array.from({ length: n + 1 }, () => new Uint32Array(m + 1));
+    for (let i = n - 1; i >= 0; i--) {
+      for (let j = m - 1; j >= 0; j--) {
+        len[i][j] = a[i] === b[j]
+          ? len[i + 1][j + 1] + 1
+          : Math.max(len[i + 1][j], len[i][j + 1]);
+      }
+    }
+    const pairs = [];
+    let i = 0, j = 0;
+    while (i < n && j < m) {
+      if (a[i] === b[j]) pairs.push([i++, j++]);
+      else if (len[i + 1][j] >= len[i][j + 1]) i++;
+      else j++;
+    }
+    return pairs;
+  }
+
+  // Changed regions, in document order, each as the span of old blocks it
+  // replaces: { start, end, before, after }.
+  //
+  // A region that rewrites the same number of blocks it replaces is split into
+  // one change per block — that is the "reworded every paragraph" case, where
+  // each rewrite stands on its own and reviewing them together would put the
+  // whole document back on screen. Any other shape (blocks merged, split, added
+  // or dropped) is kept whole, because accepting half of it would duplicate or
+  // lose text.
+  function diffBlocks(oldBlocks, newBlocks) {
+    const changes = [];
+    const add = (start, end, from, to) => {
+      const before = oldBlocks.slice(start, end);
+      const after = newBlocks.slice(from, to);
+      if (!before.length && !after.length) return;
+      if (before.length === after.length) {
+        before.forEach((b, k) => changes.push({
+          start: start + k, end: start + k + 1, before: [b], after: [after[k]],
+        }));
+      } else {
+        changes.push({ start, end, before, after });
+      }
+    };
+    let i = 0, j = 0;
+    for (const [oi, nj] of commonPairs(oldBlocks.map(blockKey), newBlocks.map(blockKey))) {
+      add(i, oi, j, nj);
+      i = oi + 1;
+      j = nj + 1;
+    }
+    add(i, oldBlocks.length, j, newBlocks.length);
+    return changes;
+  }
+
+  // The old document with the accepted changes substituted in. Changes are
+  // disjoint and in order, so this is one pass. Accepting all of them
+  // reproduces the proposal exactly.
+  function rebuild(oldBlocks, changes, accepted) {
+    const out = [];
+    let i = 0;
+    changes.forEach((c, idx) => {
+      out.push(...oldBlocks.slice(i, c.start), ...(accepted.has(idx) ? c.after : c.before));
+      i = c.end;
+    });
+    out.push(...oldBlocks.slice(i));
+    return out;
+  }
+
+  function reviewProposal(msg, doc) {
     const proposal = hooks.proposal;
     const box = document.createElement("div");
     box.className = "doc-proposal";
-    box.innerHTML =
-      `<div class="dp-head"><span></span>` +
-      `<button class="apply-btn"></button></div>`;
-    box.querySelector(".dp-head span").textContent = proposal.title;
-    const btn = box.querySelector(".apply-btn");
-    btn.textContent = proposal.applyLabel;
-    box.appendChild(proposal.renderPreview(doc));
-    btn.addEventListener("click", () => {
-      proposal.apply(doc);
-      btn.textContent = "Applied ✓";
-      btn.classList.add("applied");
-      btn.disabled = true;
-    });
     msg.appendChild(box);
+
+    // Snapshotted here: this is the same text the model was given, so it is
+    // what the proposal is a revision of.
+    const oldBlocks = proposal.splitBlocks(hooks.getDocument());
+    const changes = diffBlocks(oldBlocks, proposal.splitBlocks(doc));
+    const accepted = new Set();
+
+    const heading = (t) => {
+      const el = document.createElement("div");
+      el.className = "dp-head";
+      el.innerHTML = "<span></span>";
+      el.firstChild.textContent = t;
+      return el;
+    };
+
+    if (!changes.length) {
+      box.appendChild(heading(`${proposal.title}: nothing changed.`));
+      return;
+    }
+
+    const note = (text) => {
+      const el = document.createElement("div");
+      el.className = "dp-note";
+      el.textContent = text;
+      return el;
+    };
+
+    // One side of a change — the blocks as they are now, or as proposed.
+    //
+    // Both sides are always drawn, because which one is missing is the whole
+    // story: no "now" side means the block is new, no "proposed" side means it
+    // is being dropped. Neither reads as anything if the side is simply absent.
+    // A side can also be present and still render to nothing — `<p><br></p>`,
+    // the blank spacer paragraphs a rich-text document is full of — and an
+    // empty box says just as little, so both cases say it in words instead.
+    const side = (cls, label, blocks, whenEmpty) => {
+      const wrap = document.createElement("div");
+      wrap.className = "dp-side " + cls;
+      const tag = document.createElement("div");
+      tag.className = "dp-label";
+      tag.textContent = label;
+      wrap.appendChild(tag);
+      if (!blocks.length) {
+        wrap.appendChild(note(whenEmpty));
+        return wrap;
+      }
+      const preview = proposal.renderPreview(proposal.joinBlocks(blocks));
+      const blank = !preview.textContent.trim() && !preview.querySelector("img, table, hr");
+      wrap.appendChild(blank
+        ? note(blocks.length > 1 ? "Blank paragraphs" : "A blank paragraph")
+        : preview);
+      return wrap;
+    };
+
+    const finish = () => {
+      box.innerHTML = "";
+      const done = heading(`${accepted.size} of ${changes.length} change` +
+        `${changes.length === 1 ? "" : "s"} accepted.`);
+      box.appendChild(done);
+      if (!accepted.size) return;
+      const btn = document.createElement("button");
+      btn.className = "apply-btn";
+      btn.textContent = proposal.applyLabel;
+      btn.addEventListener("click", () => {
+        proposal.apply(proposal.joinBlocks(rebuild(oldBlocks, changes, accepted)));
+        btn.textContent = "Applied ✓";
+        btn.classList.add("applied");
+        btn.disabled = true;
+      });
+      done.appendChild(btn);
+    };
+
+    let at = 0;
+    const step = () => {
+      if (at >= changes.length) { finish(); return; }
+      const c = changes[at];
+      box.innerHTML = "";
+      box.appendChild(heading(`${proposal.title} — change ${at + 1} of ${changes.length}`));
+      const body = document.createElement("div");
+      body.className = "dp-body";
+      body.appendChild(side("dp-old", "Now", c.before, "Nothing here yet"));
+      body.appendChild(side("dp-new", "Proposed", c.after, "Removed"));
+      box.appendChild(body);
+
+      const actions = document.createElement("div");
+      actions.className = "dp-actions";
+      actions.innerHTML =
+        `<button class="apply-btn accept-btn">Accept</button>` +
+        `<button class="skip-btn">Skip</button>`;
+      const answer = (keep) => { if (keep) accepted.add(at); at++; step(); };
+      actions.querySelector(".accept-btn").addEventListener("click", () => answer(true));
+      actions.querySelector(".skip-btn").addEventListener("click", () => answer(false));
+      box.appendChild(actions);
+      msg.parentElement.scrollTop = msg.parentElement.scrollHeight;
+    };
+    step();
   }
 
   // -------------------------------------------------------------------------
@@ -718,9 +891,13 @@ const AiPane = (() => {
   //   placeholder   composer placeholder text
   //   getDocument   () => the document text to send as context
   //   getSelection  () => the selected passage to highlight, if the page has one
-  //   proposal      { title, applyLabel, renderPreview(doc) -> Element,
+  //   proposal      { title, applyLabel, renderPreview(text) -> Element,
+  //                   splitBlocks(doc) -> string[], joinBlocks(blocks) -> doc,
   //                   apply(doc) } — how an ai_words:document block is shown
-  //                   and what applying it does
+  //                   and what applying it does. The split/join pair is what
+  //                   lets the pane review a proposal block by block without
+  //                   knowing whether a block is an HTML element or a LaTeX
+  //                   paragraph.
   //   onModels      (data) => void, for anything else the page reads off
   //                   /api/models (the LaTeX editor reads `tex`)
   //

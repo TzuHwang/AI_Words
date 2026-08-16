@@ -342,12 +342,33 @@ body {
   padding: 6px 10px; background: var(--bg-alt); font-size: 13px;
 }
 .doc-proposal .dp-preview { max-height: 180px; overflow: auto; padding: 8px 10px; font-size: 13px; }
+/* One change at a time: what the block says now, above what is proposed. */
+.doc-proposal .dp-body { padding: 8px 10px; display: grid; gap: 8px; }
+.doc-proposal .dp-side { border-left: 3px solid var(--border); padding-left: 8px; }
+.doc-proposal .dp-side .dp-preview { padding: 0; max-height: 150px; }
+.doc-proposal .dp-label {
+  color: var(--text-dim); font-size: 11px; text-transform: uppercase;
+  letter-spacing: .05em; margin-bottom: 2px;
+}
+/* Stands in for a side that is absent, or one that renders to nothing. */
+.doc-proposal .dp-note { color: var(--text-dim); font-size: 13px; font-style: italic; }
+.doc-proposal .dp-old { border-left-color: var(--text-dim); }
+.doc-proposal .dp-old .dp-preview { color: var(--text-dim); }
+.doc-proposal .dp-new { border-left-color: var(--accent); }
+.doc-proposal .dp-actions {
+  display: flex; gap: 8px; padding: 8px 10px; border-top: 1px solid var(--border);
+}
 .apply-btn {
   background: var(--accent); color: var(--accent-fg); border: none;
   padding: 4px 10px; border-radius: 6px; cursor: pointer; font-size: 13px;
 }
 .apply-btn:hover { filter: brightness(1.08); }
 .apply-btn.applied { background: var(--text-dim); cursor: default; }
+.skip-btn {
+  background: transparent; color: var(--text); border: 1px solid var(--border);
+  padding: 4px 10px; border-radius: 6px; cursor: pointer; font-size: 13px;
+}
+.skip-btn:hover { background: var(--bg-alt); }
 
 #composer { display: flex; gap: 8px; padding: 12px; border-top: 1px solid var(--border); align-items: flex-end; }
 #chat-input {

@@ -2,8 +2,8 @@
 
 **繁體中文** · [English](README.md)
 
-> 一個 LibreOffice 風格的 ODT 文件編輯器，右側內建串流式 AI 助理。
-> 打開文件、（在 AI 協助下）直接於瀏覽器編輯，完成後匯出回檔案。
+> 一個右側內建串流式 AI 助理的文件編輯器：`.odt` 走 LibreOffice 風格的富文字編輯，`.tex` 走 LaTeX 原始碼編輯並即時預覽 PDF。
+> 打開文件、（在 AI 協助下）直接於瀏覽器編輯，完成後匯出成檔案或編譯成 PDF。
 
 <p>
   <img alt="Python" src="https://img.shields.io/badge/python-3.10%2B-blue">
@@ -32,18 +32,21 @@
 
 ## 簡介
 
-**AI Words** 是一個獨立可執行的桌面應用程式。啟動後會自動在瀏覽器開啟一個頁面，畫面分成左右兩個面板：
+**AI Words** 是一個獨立可執行的桌面應用程式。啟動後會自動在瀏覽器開啟一個啟動頁，並依副檔名把開啟的檔案交給合適的編輯器：
 
-- **左側 — 文件編輯器：** 仿照 Word / LibreOffice 寫作體驗的富文字編輯區。
-- **右側 — AI 助理：** 以聊天介面驅動編輯的指令列互動區，靈感來自 *Claude Code for VS Code*。
+- **富文字（`/editor`）：** 仿照 Word / LibreOffice 寫作體驗的編輯區，處理 `.odt` 與 `.html`。
+- **LaTeX（`/latex`）：** `.tex` 原始碼編輯區，在伺服器端編譯並於獨立分頁預覽 PDF。
+- **AI 助理：** 兩個編輯器右側都是同一個串流式、指令驅動的聊天面板，靈感來自 *Claude Code for VS Code*。
 
-核心的文件處理流程分為三步：
+富文字的處理流程分為三步：
 
 1. **匯入（Import）：** 載入 ODT 檔並轉描繪成 HTML 以供顯示與編輯。
 2. **編輯（Edit）：** 使用者（或 AI 助理）在瀏覽器中修改 HTML 內容。
 3. **匯出（Export）：** 儲存時將編輯後的 HTML 序列化回 ODT（或其他格式）。
 
-目標是讓使用者能打開一份文件、在瀏覽器裡直接編輯（無論是否使用 AI），並在完成後匯出成檔案。
+LaTeX 則完全沒有轉換這一層——原始碼**就是**文件本身，由系統上的引擎編譯成你所預覽的 PDF。該引擎為選用：沒有安裝時編輯器與 AI 助理仍可正常運作，只是沒有預覽。
+
+目標是讓使用者能打開一份文件、在瀏覽器裡直接編輯（無論是否使用 AI），並在完成後匯出成檔案或編譯成 PDF。
 
 ODT 轉換預設採用純 Python（`odfpy`）實作；若系統上偵測到 LibreOffice 的 `soffice` 執行檔，會自動改用它做更高保真度的轉換。
 
@@ -55,10 +58,12 @@ ODT 轉換預設採用純 Python（`odfpy`）實作；若系統上偵測到 Libr
 
 ## 功能特色
 
-- 🖥️ **單一執行檔啟動** — 啟動即在瀏覽器開啟雙面板編輯器。
+- 🖥️ **單一執行檔啟動** — 啟動即在瀏覽器開啟編輯器。
+- 🚦 **兩個編輯器，一個啟動頁** — `.odt` 走富文字、`.tex` 走 LaTeX；開檔時依副檔名自動導向。
 - 📄 **ODT ⇄ HTML** — 匯入 ODT 描繪成可編輯 HTML，儲存時再匯出回 ODT / HTML。
 - ✍️ **富文字編輯** — 粗體 / 斜體 / 底線、標題、清單等工具列操作。
-- 🤖 **串流式 AI 助理** — 支援 Anthropic API 與任何 OpenAI 相容的本地伺服器（Ollama、LM Studio…）。
+- 📐 **LaTeX 與即時 PDF 預覽** — 編輯時自動以系統上的引擎（tectonic、xelatex…）編譯，並在獨立分頁重繪 PDF 而不會跳掉閱讀位置。此功能為選用：沒有引擎時編輯器仍可正常使用。
+- 🤖 **串流式 AI 助理** — 兩個編輯器共用同一個面板；支援 Anthropic API 與任何 OpenAI 相容的本地伺服器（Ollama、LM Studio…）。
 - 🔀 **模型切換** — 從下拉選單或以 `/model <id>` 即時切換本地／雲端模型。
 - 🧩 **技能（Skills）** — 可建立與載入可重複使用的指令 / 工具集。
 - 🧠 **推理模型支援** — 會自動剝除 `<think>…</think>` 推理內容，不干擾對話顯示。
@@ -68,8 +73,9 @@ ODT 轉換預設採用純 Python（`odfpy`）實作；若系統上偵測到 Libr
 ```text
 AI_Words/
 ├── run.py                  # 便捷啟動器：python run.py（等同 python -m app）
+├── run.sh                  # 建置 Docker 映像並以容器啟動 App
 ├── pyproject.toml          # Poetry 專案設定與相依套件
-├── Dockerfile              # 純 Python（無 LibreOffice）的精簡映像
+├── Dockerfile              # 執行映像，另含 test / test-tex / test-ui 三個 target
 ├── config.json             # 首次執行時產生：模型後端與啟用中的選擇
 ├── LICENSE
 │
@@ -77,16 +83,25 @@ AI_Words/
 │   ├── __main__.py         # CLI 進入點：解析參數、啟動 uvicorn、開瀏覽器
 │   ├── server.py           # FastAPI：頁面 + JSON/SSE API
 │   ├── converter.py        # ODT ⇄ HTML（odfpy；選用 LibreOffice）
+│   ├── latex.py            # .tex → PDF，透過系統上的 LaTeX 引擎（選用）
 │   ├── ai.py               # 串流聊天（Anthropic + OpenAI 相容後端）
 │   ├── config.py           # 模型後端與啟用中的選擇管理
 │   ├── skills.py           # 技能的儲存與載入（skills/*.md）
-│   └── static/             # 雙面板網頁 UI
-│       ├── index.html
-│       ├── style.css
-│       └── app.js
+│   └── static/             # 網頁 UI —— 每個編輯器一頁，共用同一個助理面板
+│       ├── launcher.html   # 位於 / 的啟動頁        （+ launcher.css/.js）
+│       ├── index.html      # 位於 /editor 的富文字編輯器（+ app.js）
+│       ├── latex.html      # 位於 /latex 的 LaTeX 編輯器（+ latex.css/.js）
+│       ├── pdfview.html    # PDF 預覽分頁            （+ pdfview.css/.js）
+│       ├── ai-pane.js      # AI 助理面板，兩個編輯器共用
+│       ├── ui.js           # $、escapeHtml 與頁內對話框
+│       ├── style.css       # 共用外框樣式
+│       └── vendor/         # pdf.js（Apache-2.0），內嵌以便離線運作
 │
-└── skills/                 # 技能定義（Markdown）
-    └── language-consistency.md
+├── skills/                 # 技能定義（Markdown）
+│   ├── incremental-edits.md
+│   └── language-consistency.md
+│
+└── tests/                  # pytest；瀏覽器測試在 test_ui.py
 ```
 
 **資料流概觀：**
@@ -97,6 +112,7 @@ AI_Words/
       ▼
 FastAPI (app/server.py)
       ├── converter.py  ── ODT ⇄ HTML
+      ├── latex.py      ── .tex → PDF
       ├── ai.py         ── 串流至 Anthropic / 本地模型
       ├── config.py     ── 讀寫 config.json
       └── skills.py     ── 讀取 skills/*.md
@@ -157,7 +173,7 @@ poetry run ai-words --reload        # 原始碼變更時自動重載（開發用
 
 ### 用 Docker 啟動（替代方案）
 
-映像採用純 Python 版本（不含 LibreOffice），因此保持精簡：
+映像內建 LaTeX 引擎與 CJK 字型，讓 PDF 預覽開箱即用；但不含 LibreOffice——ODT 轉換退回純 Python 實作——因此體積維持在 1 GB 以內：
 
 ```bash
 docker build -t ai-words .
@@ -190,7 +206,7 @@ docker run --rm -p 8765:8765 -e ANTHROPIC_API_KEY=sk-... -v ai-words-data:/data 
 
 - **開啟（Open）** — 用工具列開啟 `.odt`（或 `.html`）檔，內容會描繪進編輯器。
 - **編輯（Edit）** — 直接在左側面板編輯；使用工具列做粗體／斜體／底線、標題與清單。
-- **詢問助理（Ask）** — 在右側面板請助理閱讀或編輯文件。當它提出修改時，會回傳整份修訂後的文件；點擊 **Apply to document** 即可套用。
+- **詢問助理（Ask）** — 在右側面板請助理閱讀或編輯文件。它會回傳整份修訂後的文件，但面板會與你的文件比對，**一次只問一個有改動的段落** —— 逐項 **Accept** 或 **Skip**，最後再套用你保留的部分。
 - **儲存（Save）** — 從 Save 選單匯出為 ODT 或 HTML。
 
 助理的斜線指令：
@@ -299,10 +315,11 @@ pyinstaller --onefile --add-data "app/static:app/static" --name ai_words run.py
 - [x] 具模型切換的 AI 聊天介面（本地 + API 後端）
 - [x] 技能的建立與載入
 - [x] 代理驅動的文件讀／寫（提議並套用）
-- [ ] **LaTeX 格式寫入支援（進行中）：** 讓文件能匯出 / 寫入 LaTeX 格式。
+- [x] LaTeX 編輯器：撰寫 `.tex`、在伺服器端編譯、預覽 PDF
+- [ ] **LaTeX 匯出：** 將開啟中的 ODT / HTML 文件轉換成 `.tex`。上述編輯器是直接撰寫 LaTeX，尚未支援從富文字文件轉換過去。
 - [ ] 更高保真度的 ODT 轉換（圖片、樣式、巢狀清單）
 - [ ] 即時／工具式編輯，取代整份文件替換
-- [ ] **真正的代理框架（進行中）：** 一個代理式工具呼叫迴圈——定義 `read_document` / `apply_edit` 工具，讓模型呼叫、於伺服器端執行並回饋結果，使模型能多步迭代。目前助理是單輪的「提議並套用」（使用者手動接受整份重寫），因此屬於聊天協調層，尚非真正的代理框架。
+- [ ] **真正的代理框架（進行中）：** 一個代理式工具呼叫迴圈——定義 `read_document` / `apply_edit` 工具，讓模型呼叫、於伺服器端執行並回饋結果，使模型能多步迭代。目前助理是單輪的「提議並套用」（模型輸出整份重寫，使用者逐段接受），因此屬於聊天協調層，尚非真正的代理框架。
 - [ ] 打包並發布預建執行檔
 
 ## 授權

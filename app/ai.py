@@ -38,6 +38,7 @@ def _ssl_context() -> ssl.SSLContext | bool:
     except Exception:  # pragma: no cover - best effort
         return True
 
+
 SYSTEM_PROMPT = """\
 You are the AI assistant inside AI Words, a two-pane document editor. The left \
 pane holds a rich-text document; you are on the right. You help the user read, \

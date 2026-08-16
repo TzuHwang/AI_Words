@@ -4,8 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>AI Words — LaTeX</title>
-  <link rel="stylesheet" href="/static/style.css?v=3">
-  <link rel="stylesheet" href="/static/latex.css?v=3">
+  <link rel="stylesheet" href="/static/style.css?v=5">
+  <link rel="stylesheet" href="/static/latex.css?v=4">
 </head>
 <body>
   <div id="tex-app">
@@ -30,8 +30,13 @@
     <!-- Main: source | AI. The compiled PDF opens in its own browser tab. -->
     <div class="tex-main">
       <section class="tex-editor">
-        <textarea id="tex-source" spellcheck="false"
-          placeholder="Type LaTeX here…"></textarea>
+        <!-- The backdrop repaints the selection the AI pane treats as focus,
+             behind the source, once the textarea's own highlight is gone. -->
+        <div class="tex-source-wrap">
+          <div id="tex-backdrop" aria-hidden="true" hidden></div>
+          <textarea id="tex-source" spellcheck="false"
+            placeholder="Type LaTeX here…"></textarea>
+        </div>
         <div id="tex-log" class="tex-log" hidden></div>
       </section>
 
@@ -45,7 +50,7 @@
 
   <input type="file" id="tex-file" accept=".tex,text/x-tex" hidden>
   <script src="/static/ui.js?v=1"></script>
-  <script src="/static/ai-pane.js?v=1"></script>
-  <script src="/static/latex.js?v=5"></script>
+  <script src="/static/ai-pane.js?v=3"></script>
+  <script src="/static/latex.js?v=8"></script>
 </body>
 </html>
