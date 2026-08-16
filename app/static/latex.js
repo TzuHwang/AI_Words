@@ -313,6 +313,11 @@ const aiReady = AiPane.init({
       pre.textContent = doc;
       return pre;
     },
+    // A block here is a TeX paragraph: lines separated by a blank line, which
+    // is also how TeX itself decides where a paragraph ends. Rejoining puts one
+    // blank line back between them, so a run of several collapses to one.
+    splitBlocks: (doc) => doc.split(/\n[ \t]*\n+/).map((b) => b.trim()).filter(Boolean),
+    joinBlocks: (blocks) => blocks.join("\n\n"),
     apply: (doc) => {
       replaceSource(doc);
       hideFocusMark();

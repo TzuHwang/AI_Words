@@ -35,11 +35,25 @@ docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
 
 # Mount the host config.json (API keys / active model) into the container's
 # /data, and keep a named volume for persisted state (skills, edits).
-docker run -d \
+#
+# app/static is mounted over the copy baked into the image so an edit to the
+# frontend (the pages, ai-pane.js, the stylesheets) shows up on a reload instead
+# of needing the image rebuilt — the server reads those files per request. It is
+# read-only because the app only ever serves them. Nothing else is mounted: the
+# Python under app/ is imported once at startup, so live-mounting it would only
+# give a half-reloaded process.
+#
+# MSYS_NO_PATHCONV is for Git Bash on Windows, which rewrites any argument that
+# looks like a Unix path into a Windows one — mangling both halves of every -v
+# (a source of `.../config.json;C`, a destination of `\Program Files\Git\data\
+# config.json`), so the mounts silently landed nowhere. It is an ordinary unset
+# variable on Linux and macOS, where the command is unaffected.
+MSYS_NO_PATHCONV=1 docker run -d \
   --name "$CONTAINER" \
   -p "$PORT:8765" \
   -v ai-words-data:/data \
   -v "$(pwd)/config.json:/data/config.json" \
+  -v "$(pwd)/app/static:/app/app/static:ro" \
   --restart unless-stopped \
   "$IMAGE"
 

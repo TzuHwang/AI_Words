@@ -206,7 +206,7 @@ If no API key is set, the app automatically selects a reachable local model so i
 
 - **Open** an `.odt` (or `.html`) file from the toolbar → it renders into the editor.
 - **Edit** directly in the left pane; use the toolbar for bold/italic/underline, headings, and lists.
-- **Ask the assistant** (right pane) to read or edit the document. When it proposes a change it returns the full revised document; click **Apply to document** to accept it.
+- **Ask the assistant** (right pane) to read or edit the document. It answers with the full revised document, but the pane diffs that against your document and asks about one changed paragraph at a time — **Accept** or **Skip** each, then apply what you kept.
 - **Save** as ODT or HTML from the Save menu.
 
 Assistant slash commands:
