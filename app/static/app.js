@@ -143,6 +143,7 @@ document.addEventListener("selectionchange", () => {
     lastDocRange = range.cloneRange();
   }
   clearFocusHighlight(); // editor is active, so the native selection shows
+  updateWordCount();     // the status bar counts the selection while there is one
 });
 // When the editor loses focus, redraw the selection as our own highlight; when
 // it regains focus, hand back to the native selection.
@@ -214,6 +215,7 @@ document.addEventListener("click", (e) => {
     case "insert-page-break": insertPageBreak(); break;
     case "insert-table": insertTable(); break;
     case "insert-link": insertLink(); break;
+    case "insert-symbol": insertSymbol(); break;
     case "about":
       uiAlert("AI Words — a LibreOffice-style document editor with an AI assistant.");
       break;
@@ -238,6 +240,42 @@ async function insertTable() {
 async function insertLink() {
   const url = await uiPrompt("Link URL:", "https://");
   if (url) exec("createLink", url);
+}
+
+// ---------------------------------------------------------------------------
+// Special characters — the grid itself is uiSymbolPicker (ui.js); what belongs
+// to this editor is the table and getting the character to the caret. The dialog
+// steals focus, so the caret is carried by hand: captured when the picker opens
+// and re-captured after every insertion, so the next one lands after the last.
+// ---------------------------------------------------------------------------
+const SYMBOL_GROUPS = [
+  ["中文標點", `，、。．：；？！‧…—－～「」『』（）〔〕［］｛｝【】〖〗《》〈〉〝〞︿﹀`],
+  ["Punctuation", `.,;:?!'"‘’“”‹›«»–—…·•§¶†‡*/\\&@#%‰°′″`],
+  ["Math", `+−±×÷=≠≈≡<>≤≥∞√∑∏∫∂∆∇∈∉⊂⊃∪∩∴∵∠⊥∥`],
+  ["Arrows", `←→↑↓↔↕⇐⇒⇑⇓⇔↵`],
+  ["Greek", `αβγδεζηθλμνξπρστφχψωΓΔΘΛΞΠΣΦΨΩ`],
+  ["Symbols", `$¢£¥€₩©®™℃℉№✓✗★☆◆●○■□▲▼♪♥`],
+];
+
+// The caret (or selection) inside the editor, if that's where it currently is.
+function editorRange() {
+  const sel = window.getSelection();
+  if (!sel || !sel.rangeCount) return null;
+  const range = sel.getRangeAt(0);
+  return editor.contains(range.commonAncestorContainer) ? range.cloneRange() : null;
+}
+
+function insertSymbol() {
+  let caret = editorRange();
+  uiSymbolPicker(SYMBOL_GROUPS, (text) => {
+    editor.focus();
+    const sel = window.getSelection();
+    if (caret) { sel.removeAllRanges(); sel.addRange(caret); }
+    document.execCommand("insertText", false, text);
+    caret = editorRange();       // insert the next one after this character
+    updateWordCount();
+    schedulePaginate();
+  });
 }
 
 // Load a document handed off from the launcher (see launcher.js). It stashed
@@ -409,10 +447,32 @@ async function newDoc() {
 
 // ---------------------------------------------------------------------------
 // Status bar: word count + zoom
+//
+// The count follows the selection the AI pane also treats as focus, so it keeps
+// showing the selection after focus moves to the chat box, just like the
+// highlight does; with no selection it counts the whole document.
+//
+// CJK is written without spaces, so splitting on whitespace would count a whole
+// sentence as one word: each CJK character counts as a word of its own, and the
+// rest of the text counts runs of letters and digits, with punctuation between
+// them separating rather than counting.
 // ---------------------------------------------------------------------------
+// Kana and CJK ideographs (incl. extension A and compatibility). Korean is
+// spaced like English, so it needs no special case and isn't listed here.
+const CJK_CHAR = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/g;
+const WORD = /[\p{L}\p{N}]+(?:['’-][\p{L}\p{N}]+)*/gu;
+
+function countWords(text) {
+  const cjk = (text.match(CJK_CHAR) || []).length;
+  return cjk + (text.replace(CJK_CHAR, " ").match(WORD) || []).length;
+}
+
 function updateWordCount() {
-  const words = (editor.textContent.trim().match(/\S+/g) || []).length;
-  $("#word-count").textContent = words === 1 ? "1 word" : `${words} words`;
+  const total = countWords(editor.textContent);
+  const plural = total === 1 ? "1 word" : `${total} words`;
+  $("#word-count").textContent = lastDocSelection
+    ? `${countWords(lastDocSelection)} of ${plural}`
+    : plural;
 }
 editor.addEventListener("input", updateWordCount);
 

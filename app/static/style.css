@@ -410,6 +410,19 @@ body {
   background: var(--bg); color: var(--text); cursor: pointer; font: inherit; }
 .dlg-actions .dlg-ok { background: var(--accent, #2563eb); color: #fff; border-color: transparent; }
 .dlg-actions button:hover { filter: brightness(1.08); }
+/* Special-character picker */
+.sym-overlay { z-index: 90; }
+.modal-box.sym-box { width: min(560px, 92vw); }
+.sym-close { border: 0; background: transparent; color: var(--text-dim);
+  cursor: pointer; font-size: 15px; line-height: 1; }
+.sym-group { margin-top: 14px; }
+.sym-title { font-size: 12px; color: var(--text-dim); margin-bottom: 6px; }
+.sym-grid { display: flex; flex-wrap: wrap; gap: 4px; }
+.sym-btn { width: 34px; height: 34px; font-size: 18px; line-height: 1; cursor: pointer;
+  background: var(--lo-combo-bg); color: var(--text);
+  border: 1px solid var(--lo-chrome-border); border-radius: 4px; }
+.sym-btn:hover { background: var(--lo-hover); border-color: var(--lo-hover-border); }
+
 #skills-list { list-style: none; padding: 0; margin: 8px 0; }
 #skills-list li { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--border); }
 #skills-list .sk-name { font-weight: 600; }

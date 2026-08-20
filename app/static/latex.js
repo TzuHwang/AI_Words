@@ -148,8 +148,81 @@ document.addEventListener("click", (e) => {
     case "new": newDoc(); break;
     case "open": openDoc(); break;
     case "save": saveToFile(); break;
+    case "insert-symbol": insertSymbol(); break;
   }
 });
+
+// ---------------------------------------------------------------------------
+// Special characters
+//
+// The grid itself is uiSymbolPicker (ui.js). What is LaTeX-specific is *what*
+// gets typed: the button shows the character, but the source gets the markup
+// that produces it, because a raw ± or α only survives a Unicode-aware engine.
+// CJK punctuation is the exception — those have no commands and are written
+// literally (which is what xeCJK / a Unicode engine expects anyway).
+//
+// The math symbols are commands that only work inside math mode ($…$), the same
+// as typing them by hand; the picker doesn't add the dollars, since the caret is
+// usually already between them.
+// ---------------------------------------------------------------------------
+const SYMBOL_GROUPS = [
+  ["中文標點", `，、。：；？！…「」『』（）〔〕【】《》〈〉—～`],
+  ["Escapes", [
+    ["%", `\\%`], ["&", `\\&`], ["#", `\\#`], ["_", `\\_`], ["$", `\\$`],
+    ["{", `\\{`], ["}", `\\}`], ["\\", `\\textbackslash`],
+    ["~", `\\textasciitilde`], ["^", `\\textasciicircum`],
+  ]],
+  ["Punctuation", [
+    ["–", `--`], ["—", `---`], ["…", `\\ldots`],
+    ["“", "``"], ["”", `''`], ["‘", "`"], ["’", `'`],
+    ["§", `\\S`], ["¶", `\\P`], ["†", `\\dag`], ["‡", `\\ddag`],
+    ["•", `\\textbullet`],
+  ]],
+  ["Math", [
+    ["±", `\\pm`], ["×", `\\times`], ["÷", `\\div`], ["·", `\\cdot`],
+    ["≠", `\\neq`], ["≈", `\\approx`], ["≡", `\\equiv`],
+    ["≤", `\\leq`], ["≥", `\\geq`], ["∞", `\\infty`],
+    ["√", `\\sqrt{}`], ["∑", `\\sum`], ["∏", `\\prod`], ["∫", `\\int`],
+    ["∂", `\\partial`], ["∇", `\\nabla`], ["∆", `\\Delta`],
+    ["∈", `\\in`], ["∉", `\\notin`], ["⊂", `\\subset`], ["⊃", `\\supset`],
+    ["∪", `\\cup`], ["∩", `\\cap`], ["∠", `\\angle`],
+    ["⊥", `\\perp`], ["∥", `\\parallel`], ["∘", `\\circ`], ["⋯", `\\cdots`],
+  ]],
+  ["Arrows", [
+    ["←", `\\leftarrow`], ["→", `\\rightarrow`],
+    ["↑", `\\uparrow`], ["↓", `\\downarrow`], ["↔", `\\leftrightarrow`],
+    ["⇐", `\\Leftarrow`], ["⇒", `\\Rightarrow`], ["⇔", `\\Leftrightarrow`],
+    ["↦", `\\mapsto`],
+  ]],
+  ["Greek", [
+    ["α", `\\alpha`], ["β", `\\beta`], ["γ", `\\gamma`], ["δ", `\\delta`],
+    ["ε", `\\epsilon`], ["ζ", `\\zeta`], ["η", `\\eta`], ["θ", `\\theta`],
+    ["λ", `\\lambda`], ["μ", `\\mu`], ["ν", `\\nu`], ["ξ", `\\xi`],
+    ["π", `\\pi`], ["ρ", `\\rho`], ["σ", `\\sigma`], ["τ", `\\tau`],
+    ["φ", `\\phi`], ["χ", `\\chi`], ["ψ", `\\psi`], ["ω", `\\omega`],
+    ["Γ", `\\Gamma`], ["Θ", `\\Theta`], ["Λ", `\\Lambda`], ["Ξ", `\\Xi`],
+    ["Π", `\\Pi`], ["Σ", `\\Sigma`], ["Φ", `\\Phi`], ["Ψ", `\\Psi`],
+    ["Ω", `\\Omega`],
+  ]],
+  ["Symbols", [
+    ["£", `\\pounds`], ["€", `\\texteuro`], ["¥", `\\textyen`],
+    ["©", `\\copyright`], ["®", `\\textregistered`], ["™", `\\texttrademark`],
+    ["°", `\\textdegree`], ["℃", `\\textcelsius`],
+  ]],
+];
+
+function insertSymbol() {
+  uiSymbolPicker(SYMBOL_GROUPS, (text) => {
+    // A textarea keeps selectionStart/End while blurred, so focusing it again
+    // puts the caret back where the user left it. execCommand keeps the typing
+    // on the native undo stack; setRangeText is the fallback where it's gone.
+    source.focus();
+    if (!document.execCommand("insertText", false, text)) {
+      source.setRangeText(text, source.selectionStart, source.selectionEnd, "end");
+    }
+    scheduleCompile();
+  });
+}
 
 // ---------------------------------------------------------------------------
 // AI-focus marker

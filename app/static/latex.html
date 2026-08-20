@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>AI Words — LaTeX</title>
-  <link rel="stylesheet" href="/static/style.css?v=5">
+  <link rel="stylesheet" href="/static/style.css?v=6">
   <link rel="stylesheet" href="/static/latex.css?v=4">
 </head>
 <body>
@@ -15,6 +15,9 @@
       <button class="tex-btn" data-act="new">New</button>
       <button class="tex-btn" data-act="open">Open…</button>
       <button class="tex-btn" data-act="save" title="Save (Ctrl+S)">Save</button>
+      <span class="tex-sep"></span>
+      <button class="tex-btn" data-act="insert-symbol"
+        title="Insert special character">Ω</button>
       <span class="tex-sep"></span>
       <button class="tex-btn tex-compile" id="compile-btn" data-act="compile">▶ Compile</button>
       <label class="tex-auto"><input type="checkbox" id="auto-compile" checked> Auto</label>
@@ -49,8 +52,8 @@
   </div>
 
   <input type="file" id="tex-file" accept=".tex,text/x-tex" hidden>
-  <script src="/static/ui.js?v=1"></script>
+  <script src="/static/ui.js?v=2"></script>
   <script src="/static/ai-pane.js?v=3"></script>
-  <script src="/static/latex.js?v=8"></script>
+  <script src="/static/latex.js?v=9"></script>
 </body>
 </html>
