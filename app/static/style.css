@@ -64,6 +64,12 @@ body {
 #ai-pane { flex: 0 0 420px; display: flex; flex-direction: column; min-width: 300px;
   background: var(--bg-pane); border-left: 1px solid var(--border); }
 #ai-pane.collapsed, #divider.collapsed { display: none; }
+/* On narrow windows the fixed 420px pane would push the editor pane off screen
+   (it can only shrink while the editor keeps its own minimum), so below this
+   width the pane is allowed to yield space instead of clipping. */
+@media (max-width: 1000px) {
+  #ai-pane { flex: 0 1 420px; }
+}
 
 /* Draggable divider between editor and AI pane */
 #divider {
@@ -137,6 +143,12 @@ body {
 .lo-tb-sep { width: 1px; height: 20px; background: var(--lo-chrome-border); margin: 0 4px; }
 .lo-tb-end { margin-left: auto; }
 .lo-tb-btn.active { background: var(--lo-hover); border-color: var(--lo-hover-border); }
+.lo-tb-btn .lo-ic { width: 16px; height: 16px; display: block; }
+.lo-tb-btn .lo-ic path {
+  fill: none; stroke: currentColor; stroke-width: 1.6;
+  stroke-linecap: square; stroke-linejoin: miter;
+}
+.lo-tb-btn.active .lo-ic path { stroke: var(--accent); }
 
 .lo-combo {
   height: 28px; background: var(--lo-combo-bg); color: var(--text);
@@ -244,9 +256,14 @@ body {
   background: var(--lo-chrome); border-top: 1px solid var(--lo-chrome-border);
   padding: 3px 12px; font-size: 12px; color: var(--text-dim);
 }
-.lo-sb-sep { width: 1px; height: 14px; background: var(--lo-chrome-border); }
-.lo-sb-spacer { flex: 1; }
-.lo-zoom { display: flex; align-items: center; gap: 8px; }
+/* Never wrap or squash the one-line items: the filename shrinks with an
+   ellipsis when the editor pane gets narrow, everything else stays put. */
+.lo-statusbar > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.lo-sb-sep { width: 1px; height: 14px; background: var(--lo-chrome-border); flex: none; }
+.lo-sb-spacer { flex: 1 1 0; }
+#doc-name { flex: 0 1 auto; max-width: 35%; }
+#page-count, #word-count { flex: none; }
+.lo-zoom { display: flex; align-items: center; gap: 8px; flex: none; }
 .lo-zoom input[type=range] { width: 120px; }
 #zoom-label { width: 38px; text-align: right; font-variant-numeric: tabular-nums; }
 

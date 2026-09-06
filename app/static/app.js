@@ -25,6 +25,7 @@ function replaceEditorContent(html) {
   const ok = document.execCommand("insertHTML", false, html);
   if (!ok) editor.innerHTML = html; // fallback if the command is unsupported
   updateWordCount();
+  syncToolbarState();
   schedulePaginate();
 }
 
@@ -35,6 +36,7 @@ function exec(cmd, value = null) {
   editor.focus();
   document.execCommand(cmd, false, value);
   updateWordCount();
+  syncToolbarState();
   schedulePaginate();
 }
 
@@ -105,6 +107,92 @@ function syncFontSelect() {
   }
 }
 document.addEventListener("selectionchange", syncFontSelect);
+
+// ---------------------------------------------------------------------------
+// Toolbar pressed-states (LibreOffice-style): the alignment buttons and the
+// format toggles (B/I/U/S, lists) reflect what the caret is in. Alignment is
+// read off the computed style of the block(s) under the selection; the toggles
+// come from queryCommandState.
+// ---------------------------------------------------------------------------
+const ALIGN_CMD_TO_VALUE = {
+  justifyLeft: "left", justifyCenter: "center",
+  justifyRight: "right", justifyFull: "justify",
+};
+const ALIGN_VALUE_TO_CMD = {
+  left: "justifyLeft", center: "justifyCenter",
+  right: "justifyRight", justify: "justifyFull",
+};
+const TOGGLE_CMDS = [
+  "bold", "italic", "underline", "strikeThrough",
+  "insertUnorderedList", "insertOrderedList",
+];
+
+// The text-align of the block(s) the current selection (or the last one made
+// inside the editor) covers: a single shared value, or null for mixed/none.
+function selectionBlockAlign() {
+  const sel = window.getSelection();
+  let range = null;
+  if (sel && sel.rangeCount) {
+    const r = sel.getRangeAt(0);
+    if (editor.contains(r.commonAncestorContainer)) range = r;
+  }
+  if (!range && lastDocRange && editor.contains(lastDocRange.commonAncestorContainer)) {
+    range = lastDocRange;
+  }
+  if (!range) return null;
+
+  const blockOf = (node) => {
+    let el = node.nodeType === 3 ? node.parentElement : node;
+    while (el && el !== editor) {
+      const display = getComputedStyle(el).display;
+      if (display === "block" || display === "list-item") return el;
+      el = el.parentElement;
+    }
+    return null;
+  };
+  const addAt = (node) => {
+    const b = blockOf(node);
+    if (!b) return;
+    const value = getComputedStyle(b).textAlign;
+    // The computed value of an unset alignment is "start"; treat it as left,
+    // which is what an LTR document means by it.
+    aligns.add(value === "start" ? "left" : value === "end" ? "right" : value);
+  };
+  const aligns = new Set();
+  if (range.collapsed) {
+    addAt(range.startContainer);
+  } else {
+    const root = range.commonAncestorContainer;
+    const base = root.nodeType === 3 ? root.parentNode : root;
+    const walker = document.createTreeWalker(base, NodeFilter.SHOW_TEXT, {
+      acceptNode: (n) =>
+        n.nodeValue && n.nodeValue.trim() && range.intersectsNode(n)
+          ? NodeFilter.FILTER_ACCEPT
+          : NodeFilter.FILTER_REJECT,
+    });
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) addAt(n);
+  }
+  if (aligns.size === 1) {
+    const only = [...aligns][0];
+    return only in ALIGN_VALUE_TO_CMD ? only : null;
+  }
+  return null;
+}
+
+function syncToolbarState() {
+  const align = selectionBlockAlign();
+  document.querySelectorAll(".lo-tb-btn[data-cmd]").forEach((btn) => {
+    const cmd = btn.dataset.cmd;
+    let on = false;
+    if (cmd in ALIGN_CMD_TO_VALUE) {
+      on = align !== null && ALIGN_CMD_TO_VALUE[cmd] === align;
+    } else if (TOGGLE_CMDS.includes(cmd)) {
+      try { on = document.queryCommandState(cmd); } catch (_) { on = false; }
+    }
+    btn.classList.toggle("active", on);
+  });
+}
+document.addEventListener("selectionchange", syncToolbarState);
 
 // Remember the most recent non-empty selection made *inside* the editor, so the
 // AI chat can send it as focus context even after focus moves to the chat box
@@ -782,6 +870,36 @@ window.addEventListener("keydown", (e) => {
   }
 });
 
+// Alignment shortcuts (LibreOffice keeps Ctrl+L/E/R/J; browsers reserve most
+// of those for chrome, so Ctrl/Cmd+Shift+L/E and Ctrl/Cmd+Alt+L/E/R/J are the
+// dependable spellings — plain Ctrl+L/E/R/J is honoured where the browser
+// delivers it). Ignored while the focus is in an input/textarea/select so they
+// never fire while typing in the AI chat.
+const ALIGN_KEYS = {
+  l: "justifyLeft", e: "justifyCenter", r: "justifyRight", j: "justifyFull",
+};
+window.addEventListener("keydown", (e) => {
+  const ctrl = e.ctrlKey || e.metaKey;
+  if (!ctrl || e.repeat) return;
+  const k = (e.key || "").toLowerCase();
+  if (!(k in ALIGN_KEYS)) return;
+  // Only from the document itself (or page chrome like <body>): never while an
+  // input/textarea/select — e.g. the AI chat box — has focus.
+  const target = e.target;
+  if (target && target !== document.body && target.isContentEditable !== true) return;
+  const shift = e.shiftKey, alt = e.altKey, meta = e.metaKey;
+  const ctrlOnly = ctrl && !shift && !alt;                 // plain Ctrl/Cmd+key
+  const shiftLeft = shift && !alt && (k === "l" || k === "e" || k === "j");
+  const altAny = alt && !shift;                            // Ctrl/Cmd+Alt+key
+  const exclusive = ctrlOnly || shiftLeft || altAny;
+  if (!exclusive || (ctrl && meta)) return;                // keep it unambiguous
+  const anchor = window.getSelection()?.anchorNode;
+  if (!editor.contains(anchor)) return;
+  e.preventDefault();
+  e.stopPropagation();
+  exec(ALIGN_KEYS[k]);
+});
+
 // Tab inserts one full-width space (U+3000) — exactly one CJK character wide —
 // rather than moving focus out of the editor. execCommand keeps it undoable.
 editor.addEventListener("keydown", (e) => {
@@ -790,10 +908,15 @@ editor.addEventListener("keydown", (e) => {
     document.execCommand("insertText", false, "　");
   }
 });
+// Keep the toolbar pressed-states fresh after typing/clicking inside the doc,
+// not just when the selection changes.
+editor.addEventListener("keyup", syncToolbarState);
+editor.addEventListener("mouseup", syncToolbarState);
 
 // ---------------------------------------------------------------------------
 // Init
 // ---------------------------------------------------------------------------
 consumeHandoff();
 updateWordCount();
+syncToolbarState();
 paginate();

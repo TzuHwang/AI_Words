@@ -23,7 +23,13 @@ from html.parser import HTMLParser
 from odf import table
 from odf.element import Element, Text
 from odf.opendocument import OpenDocumentText, load
-from odf.style import DefaultStyle, FontFace, Style, TextProperties
+from odf.style import (
+    DefaultStyle,
+    FontFace,
+    ParagraphProperties,
+    Style,
+    TextProperties,
+)
 from odf.text import H, LineBreak, ListItem, P, Span
 from odf.text import List as OdfList
 
@@ -118,9 +124,10 @@ def _read_text_props(style) -> tuple[set[str], dict[str, str]]:
 def _collect_styles(doc) -> tuple[dict[str, dict], str | None]:
     """Return ``(styles, default_font)``.
 
-    ``styles`` maps a style name -> ``{"flags", "css", "parent"}``. ``default_font``
-    is the font-family from the default paragraph style, used as the fallback for
-    paragraphs whose font is inherited rather than set on a run.
+    ``styles`` maps a style name -> ``{"flags", "css", "parent", "align"}``.
+    ``default_font`` is the font-family from the default paragraph style, used
+    as the fallback for paragraphs whose font is inherited rather than set on a
+    run.
     """
     styles: dict[str, dict] = {}
     for container in (doc.automaticstyles, doc.styles):
@@ -129,10 +136,17 @@ def _collect_styles(doc) -> tuple[dict[str, dict], str | None]:
             if not name:
                 continue
             fmts, css = _read_text_props(style)
+            align = None
+            for props in style.getElementsByType(ParagraphProperties):
+                value = props.getAttribute("textalign")
+                if value:
+                    align = value
+                    break
             styles[name] = {
                 "flags": fmts,
                 "css": css,
                 "parent": style.getAttribute("parentstylename"),
+                "align": align,
             }
     default_font = None
     for ds in doc.styles.getElementsByType(DefaultStyle):
@@ -158,6 +172,21 @@ def _paragraph_font(style_name: str | None, styles: dict[str, dict],
             return font
         name = entry["parent"]
     return default_font
+
+
+def _paragraph_align(style_name: str | None, styles: dict[str, dict]) -> str | None:
+    """Resolve a paragraph's text-align from its style chain, if any."""
+    seen: set[str] = set()
+    name = style_name
+    while name and name not in seen:
+        seen.add(name)
+        entry = styles.get(name)
+        if not entry:
+            break
+        if entry.get("align"):
+            return entry["align"]
+        name = entry["parent"]
+    return None
 
 
 def _wrap_formats(inner: str, fmts: set[str]) -> str:
@@ -253,6 +282,13 @@ def _table_to_html(node: Element, styles: dict[str, dict],
 
 def _block_to_html(node: Element, styles: dict[str, dict],
                    default_font: str | None = None, inside_li: bool = False) -> str:
+    def align_attr(style_name: str | None) -> str:
+        """Inline `` style="text-align: X"`` for a block's resolved alignment."""
+        align = _paragraph_align(style_name, styles)
+        if not align:
+            return ""
+        return f' style="text-align: {html_module.escape(align, quote=True)}"'
+
     qname = node.qname[1]
     if qname == "h":
         level = node.getAttribute("outlinelevel") or "1"
@@ -261,13 +297,14 @@ def _block_to_html(node: Element, styles: dict[str, dict],
         except (TypeError, ValueError):
             level = 1
         inner = _apply_paragraph_font(_inline_to_html(node, styles), node, styles, default_font)
-        return f"<h{level}>{inner}</h{level}>"
+        return f"<h{level}{align_attr(node.getAttribute('stylename'))}>{inner}</h{level}>"
     if qname == "p":
         inner = _inline_to_html(node, styles)
         if inside_li:
             return inner  # avoid <p> inside <li> for cleaner editing
         inner = _apply_paragraph_font(inner, node, styles, default_font)
-        return f"<p>{inner}</p>" if inner else "<p><br></p>"
+        style_attr = align_attr(node.getAttribute("stylename"))
+        return f"<p{style_attr}>{inner}</p>" if inner else f"<p{style_attr}><br></p>"
     if qname == "list":
         # Heuristic: treat as ordered if the style name hints at numbering.
         style_name = (node.getAttribute("stylename") or "").lower()
@@ -326,6 +363,9 @@ def _extract_body(full_html: str) -> str:
 
 _BLOCK_TAGS = {"p", "h1", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "li",
                "table", "tr", "td", "div"}
+
+# CSS text-align tokens we map to ODF fo:text-align on export.
+_ALIGN_VALUES = {"left", "right", "center", "justify", "start", "end"}
 _INLINE_FORMAT_TAGS = {
     "strong": _BOLD,
     "b": _BOLD,
@@ -474,6 +514,8 @@ class _HtmlToOdt(HTMLParser):
         self.doc = OpenDocumentText()
         self._style_cache: dict[frozenset, Style] = {}
         self._style_counter = 0
+        self._align_cache: dict[str, Style] = {}
+        self._block_align: str | None = None
         self._fmt_stack: list[str] = []
         self._css_stack: list[dict[str, str]] = []  # span/font formatting
         self._fonts: set[str] = set()               # declared font faces
@@ -515,12 +557,25 @@ class _HtmlToOdt(HTMLParser):
         return style
 
     # -- block helpers ----------------------------------------------------
+    def _align_style(self, align: str) -> Style:
+        """Paragraph style carrying a single ``fo:text-align``, cached per value."""
+        style = self._align_cache.get(align)
+        if style is None:
+            style = Style(name=f"Al{len(self._align_cache) + 1}", family="paragraph")
+            style.addElement(ParagraphProperties(textalign=align))
+            self.doc.automaticstyles.addElement(style)
+            self._align_cache[align] = style
+        return style
+
     def _new_block(self, kind: str) -> None:
         self._finish_block()
         if kind.startswith("h") and len(kind) == 2 and kind[1].isdigit():
             self._block = H(outlinelevel=int(kind[1]))
         else:
             self._block = P()
+        if self._block_align:
+            self._block.setAttribute("stylename", self._align_style(self._block_align))
+            self._block_align = None
         self._block_kind = kind
 
     def _finish_block(self) -> None:
@@ -583,6 +638,13 @@ class _HtmlToOdt(HTMLParser):
             self._new_block("p")
             return
         if tag in ("p", "div", "h1", "h2", "h3", "h4", "h5", "h6"):
+            decls = {}
+            for key, value in attrs:
+                if key.lower() == "style":
+                    decls = _parse_style(value)
+                    break
+            align = decls.get("text-align")
+            self._block_align = align if align in _ALIGN_VALUES else None
             self._new_block(tag)
             return
 

@@ -150,3 +150,102 @@ def test_html_escaping_roundtrip(pure_converter):
     back = converter.odt_bytes_to_html(odt)
     assert "a < b & c" not in back  # angle brackets must stay escaped
     assert "&lt;" in back and "&amp;" in back
+
+
+# -- paragraph alignment round trip ----------------------------------------
+
+def test_roundtrip_alignment_all_values(pure_converter):
+    # Inline text-align on blocks (what execCommand writes with styleWithCSS)
+    # must survive an ODT round trip as fo:text-align.
+    html = (
+        '<p style="text-align: left;">L</p>'
+        '<p style="text-align: center;">C</p>'
+        '<p style="text-align: right;">R</p>'
+        '<p style="text-align: justify;">J</p>'
+    )
+    odt = converter.html_to_odt_bytes(html)
+    back = converter.odt_bytes_to_html(odt)
+    assert 'style="text-align: left">L<' in back
+    assert 'style="text-align: center">C<' in back
+    assert 'style="text-align: right">R<' in back
+    assert 'style="text-align: justify">J<' in back
+
+
+def test_export_alignment_writes_fo_text_align(pure_converter):
+    import io
+    import zipfile
+
+    odt = converter.html_to_odt_bytes('<p style="text-align: center;">mid</p>')
+    content = zipfile.ZipFile(io.BytesIO(odt)).read("content.xml").decode("utf-8")
+    assert 'fo:text-align="center"' in content
+    assert 'fo:text-align="right"' not in content
+
+
+def test_roundtrip_heading_alignment(pure_converter):
+    odt = converter.html_to_odt_bytes('<h2 style="text-align: right;">R</h2>')
+    back = converter.odt_bytes_to_html(odt)
+    assert '<h2 style="text-align: right">R</h2>' in back
+
+
+def test_import_alignment_from_paragraph_style(pure_converter):
+    # A real ODT usually stores alignment on the paragraph style; import must
+    # carry it onto the block as inline CSS.
+    from odf.opendocument import OpenDocumentText
+    from odf.style import ParagraphProperties, Style
+    from odf.text import P
+
+    doc = OpenDocumentText()
+    pstyle = Style(name="P1", family="paragraph")
+    pstyle.addElement(ParagraphProperties(textalign="center"))
+    doc.automaticstyles.addElement(pstyle)
+    doc.text.addElement(P(stylename=pstyle, text="置中"))
+
+    import tempfile
+    import os
+
+    buf = tempfile.NamedTemporaryFile(suffix=".odt", delete=False)
+    buf.close()
+    doc.save(buf.name)
+    data = open(buf.name, "rb").read()
+    os.unlink(buf.name)
+
+    html = converter.odt_bytes_to_html(data)
+    assert "text-align: center" in html
+
+
+def test_import_alignment_inherited_from_parent_style(pure_converter):
+    from odf.opendocument import OpenDocumentText
+    from odf.style import ParagraphProperties, Style
+    from odf.text import P
+
+    doc = OpenDocumentText()
+    # Named (office:styles) styles are kept by odfpy on save — an automatic
+    # style referenced only by another style's parent chain is pruned — which
+    # is also how real LibreOffice files carry their style hierarchy.
+    parent = Style(name="Base", family="paragraph")
+    parent.addElement(ParagraphProperties(textalign="justify"))
+    doc.styles.addElement(parent)
+    child = Style(name="Child", family="paragraph", parentstylename="Base")
+    doc.styles.addElement(child)
+    doc.text.addElement(P(stylename=child, text="繼承"))
+
+    import tempfile
+    import os
+
+    buf = tempfile.NamedTemporaryFile(suffix=".odt", delete=False)
+    buf.close()
+    doc.save(buf.name)
+    data = open(buf.name, "rb").read()
+    os.unlink(buf.name)
+
+    html = converter.odt_bytes_to_html(data)
+    assert "text-align: justify" in html
+
+
+def test_no_alignment_adds_no_style_attr(pure_converter):
+    # Blocks without alignment keep their clean output (no stray style attr).
+    html = "<p>plain</p><h3>plain heading</h3>"
+    back = converter.odt_bytes_to_html(converter.html_to_odt_bytes(html))
+    assert "<p>plain</p>" in back
+    assert "<h3>plain heading</h3>" in back
+    assert "text-align" not in back
