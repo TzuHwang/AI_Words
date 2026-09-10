@@ -6,21 +6,25 @@ used instead for higher-fidelity conversion (auto-detected; never required).
 
 The pure-Python converter handles the common word-processing subset:
 headings, paragraphs, bold/italic/underline runs, ordered/unordered lists,
-line breaks and simple tables. It is intentionally lossy for exotic features —
-the goal is a clean, editable HTML representation, not perfect fidelity.
+line breaks, simple tables, paragraph alignment, page breaks and inline
+images. It is intentionally lossy for exotic features — the goal is a clean,
+editable HTML representation, not perfect fidelity.
 """
 
 from __future__ import annotations
 
+import base64
 import html as html_module
+import io
 import os
 import re
 import shutil
 import subprocess
 import tempfile
+import zipfile
 from html.parser import HTMLParser
 
-from odf import table
+from odf import draw, table
 from odf.element import Element, Text
 from odf.opendocument import OpenDocumentText, load
 from odf.style import (
@@ -124,10 +128,10 @@ def _read_text_props(style) -> tuple[set[str], dict[str, str]]:
 def _collect_styles(doc) -> tuple[dict[str, dict], str | None]:
     """Return ``(styles, default_font)``.
 
-    ``styles`` maps a style name -> ``{"flags", "css", "parent", "align"}``.
-    ``default_font`` is the font-family from the default paragraph style, used
-    as the fallback for paragraphs whose font is inherited rather than set on a
-    run.
+    ``styles`` maps a style name -> ``{"flags", "css", "parent", "align",
+    "break_before", "break_after"}``. ``default_font`` is the font-family from
+    the default paragraph style, used as the fallback for paragraphs whose font
+    is inherited rather than set on a run.
     """
     styles: dict[str, dict] = {}
     for container in (doc.automaticstyles, doc.styles):
@@ -137,16 +141,25 @@ def _collect_styles(doc) -> tuple[dict[str, dict], str | None]:
                 continue
             fmts, css = _read_text_props(style)
             align = None
+            break_before = None
+            break_after = None
             for props in style.getElementsByType(ParagraphProperties):
                 value = props.getAttribute("textalign")
                 if value:
                     align = value
-                    break
+                value = props.getAttribute("breakbefore")
+                if value:
+                    break_before = value
+                value = props.getAttribute("breakafter")
+                if value:
+                    break_after = value
             styles[name] = {
                 "flags": fmts,
                 "css": css,
                 "parent": style.getAttribute("parentstylename"),
                 "align": align,
+                "break_before": break_before,
+                "break_after": break_after,
             }
     default_font = None
     for ds in doc.styles.getElementsByType(DefaultStyle):
@@ -189,6 +202,70 @@ def _paragraph_align(style_name: str | None, styles: dict[str, dict]) -> str | N
     return None
 
 
+def _paragraph_breaks(style_name: str | None,
+                      styles: dict[str, dict]) -> tuple[str | None, str | None]:
+    """Resolve a paragraph's (break-before, break-after) from its style chain."""
+    seen: set[str] = set()
+    name = style_name
+    before = after = None
+    while name and name not in seen:
+        seen.add(name)
+        entry = styles.get(name)
+        if not entry:
+            break
+        if before is None and entry.get("break_before"):
+            before = entry["break_before"]
+        if after is None and entry.get("break_after"):
+            after = entry["break_after"]
+        name = entry["parent"]
+    return before, after
+
+
+# The editor marks a manual page break with this element; paginate() (app.js)
+# starts the next block on a fresh sheet when it sees one.
+_PAGE_BREAK_MARKER = '<div class="page-break" contenteditable="false"></div>'
+
+
+def _mime_for_name(name: str) -> str:
+    ext = os.path.splitext(name)[1].lower()
+    return {
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".gif": "image/gif",
+        ".svg": "image/svg+xml",
+        ".webp": "image/webp",
+        ".bmp": "image/bmp",
+    }.get(ext, "application/octet-stream")
+
+
+def _image_html(frame: Element, pictures: dict[str, bytes]) -> str:
+    """Render an ODF draw:frame holding a draw:image as an inline <img>."""
+    for image in frame.getElementsByType(draw.Image):
+        href = image.getAttribute("href")
+        if not href:
+            continue
+        key = href.lstrip("./")
+        data = pictures.get(key) or pictures.get(key.rsplit("/", 1)[-1])
+        if not data:
+            return '<img alt="">'
+        encoded = base64.b64encode(data).decode("ascii")
+        mime = _mime_for_name(key)
+        width = frame.getAttribute("width")
+        height = frame.getAttribute("height")
+        style = ""
+        if width:
+            style += f"width: {width};"
+        if height:
+            style += f"height: {height};"
+        style_attr = f' style="{style}"' if style else ""
+        return (
+            f'<img src="data:{mime};base64,{encoded}"{style_attr} '
+            f'alt="">'
+        )
+    return ""
+
+
 def _wrap_formats(inner: str, fmts: set[str]) -> str:
     if _BOLD in fmts:
         inner = f"<strong>{inner}</strong>"
@@ -208,8 +285,10 @@ def _wrap_run(inner: str, info: dict) -> str:
     return _wrap_formats(inner, info.get("flags", set()) if info else set())
 
 
-def _inline_to_html(node: Element, styles: dict[str, set[str]]) -> str:
+def _inline_to_html(node: Element, styles: dict[str, set[str]],
+                    pictures: dict[str, bytes] | None = None) -> str:
     """Render the inline content of a paragraph/heading node to HTML."""
+    pictures = pictures or {}
     parts: list[str] = []
     for child in node.childNodes:
         if isinstance(child, Text):
@@ -219,7 +298,9 @@ def _inline_to_html(node: Element, styles: dict[str, set[str]]) -> str:
             if qname == "span":
                 style_name = child.getAttribute("stylename")
                 info = styles.get(style_name, {}) if style_name else {}
-                parts.append(_wrap_run(_inline_to_html(child, styles), info))
+                parts.append(_wrap_run(_inline_to_html(child, styles, pictures), info))
+            elif qname == "frame":  # inline image (draw:frame/draw:image)
+                parts.append(_image_html(child, pictures))
             elif qname == "line-break":
                 parts.append("<br>")
             elif qname == "tab":
@@ -231,10 +312,10 @@ def _inline_to_html(node: Element, styles: dict[str, set[str]]) -> str:
                 href = child.getAttribute("href") or "#"
                 parts.append(
                     f'<a href="{html_module.escape(href, quote=True)}">'
-                    f"{_inline_to_html(child, styles)}</a>"
+                    f"{_inline_to_html(child, styles, pictures)}</a>"
                 )
             else:
-                parts.append(_inline_to_html(child, styles))
+                parts.append(_inline_to_html(child, styles, pictures))
     return "".join(parts)
 
 
@@ -252,7 +333,9 @@ def _apply_paragraph_font(inner: str, node: Element, styles: dict[str, dict],
 
 
 def _list_to_html(node: Element, styles: dict[str, dict], ordered: bool,
-                  default_font: str | None = None) -> str:
+                  default_font: str | None = None,
+                  pictures: dict[str, bytes] | None = None) -> str:
+    pictures = pictures or {}
     tag = "ol" if ordered else "ul"
     items: list[str] = []
     for child in node.childNodes:
@@ -260,13 +343,16 @@ def _list_to_html(node: Element, styles: dict[str, dict], ordered: bool,
             inner: list[str] = []
             for sub in child.childNodes:
                 if isinstance(sub, Element):
-                    inner.append(_block_to_html(sub, styles, default_font, inside_li=True))
+                    inner.append(_block_to_html(sub, styles, default_font,
+                                                inside_li=True, pictures=pictures))
             items.append(f"<li>{''.join(inner)}</li>")
     return f"<{tag}>{''.join(items)}</{tag}>"
 
 
 def _table_to_html(node: Element, styles: dict[str, dict],
-                   default_font: str | None = None) -> str:
+                   default_font: str | None = None,
+                   pictures: dict[str, bytes] | None = None) -> str:
+    pictures = pictures or {}
     rows: list[str] = []
     for row in node.getElementsByType(table.TableRow):
         cells: list[str] = []
@@ -274,14 +360,18 @@ def _table_to_html(node: Element, styles: dict[str, dict],
             inner: list[str] = []
             for sub in cell.childNodes:
                 if isinstance(sub, Element):
-                    inner.append(_block_to_html(sub, styles, default_font))
+                    inner.append(_block_to_html(sub, styles, default_font,
+                                                pictures=pictures))
             cells.append(f"<td>{''.join(inner)}</td>")
         rows.append(f"<tr>{''.join(cells)}</tr>")
     return f"<table>{''.join(rows)}</table>"
 
 
 def _block_to_html(node: Element, styles: dict[str, dict],
-                   default_font: str | None = None, inside_li: bool = False) -> str:
+                   default_font: str | None = None, inside_li: bool = False,
+                   pictures: dict[str, bytes] | None = None) -> str:
+    pictures = pictures or {}
+
     def align_attr(style_name: str | None) -> str:
         """Inline `` style="text-align: X"`` for a block's resolved alignment."""
         align = _paragraph_align(style_name, styles)
@@ -289,33 +379,49 @@ def _block_to_html(node: Element, styles: dict[str, dict],
             return ""
         return f' style="text-align: {html_module.escape(align, quote=True)}"'
 
+    def breaks(style_name: str | None) -> tuple[str, str]:
+        """Marker prefix/suffix for a block that forces a page break."""
+        before, after = _paragraph_breaks(style_name, styles)
+        return (
+            _PAGE_BREAK_MARKER if before == "page" else "",
+            _PAGE_BREAK_MARKER if after == "page" else "",
+        )
+
     qname = node.qname[1]
+    if qname == "frame":  # anchored image
+        return _image_html(node, pictures)
     if qname == "h":
         level = node.getAttribute("outlinelevel") or "1"
         try:
             level = max(1, min(6, int(level)))
         except (TypeError, ValueError):
             level = 1
-        inner = _apply_paragraph_font(_inline_to_html(node, styles), node, styles, default_font)
-        return f"<h{level}{align_attr(node.getAttribute('stylename'))}>{inner}</h{level}>"
+        inner = _apply_paragraph_font(_inline_to_html(node, styles, pictures),
+                                      node, styles, default_font)
+        prefix, suffix = breaks(node.getAttribute("stylename"))
+        return (prefix
+                + f"<h{level}{align_attr(node.getAttribute('stylename'))}>{inner}</h{level}>"
+                + suffix)
     if qname == "p":
-        inner = _inline_to_html(node, styles)
+        inner = _inline_to_html(node, styles, pictures)
         if inside_li:
             return inner  # avoid <p> inside <li> for cleaner editing
         inner = _apply_paragraph_font(inner, node, styles, default_font)
         style_attr = align_attr(node.getAttribute("stylename"))
-        return f"<p{style_attr}>{inner}</p>" if inner else f"<p{style_attr}><br></p>"
+        html_block = f"<p{style_attr}>{inner}</p>" if inner else f"<p{style_attr}><br></p>"
+        prefix, suffix = breaks(node.getAttribute("stylename"))
+        return prefix + html_block + suffix
     if qname == "list":
         # Heuristic: treat as ordered if the style name hints at numbering.
         style_name = (node.getAttribute("stylename") or "").lower()
         ordered = "numbering" in style_name or "ordered" in style_name or "num" in style_name
-        return _list_to_html(node, styles, ordered, default_font)
+        return _list_to_html(node, styles, ordered, default_font, pictures)
     if qname == "table":
-        return _table_to_html(node, styles, default_font)
+        return _table_to_html(node, styles, default_font, pictures)
     if isinstance(node, Element):
         # Unknown block: recurse into children.
         return "".join(
-            _block_to_html(c, styles, default_font)
+            _block_to_html(c, styles, default_font, pictures=pictures)
             for c in node.childNodes if isinstance(c, Element)
         )
     return ""
@@ -336,12 +442,18 @@ def odt_bytes_to_html(data: bytes) -> str:
             return _extract_body(full)
 
         # Pure-python fallback.
+        with zipfile.ZipFile(io.BytesIO(data)) as zf:
+            pictures = {
+                name: zf.read(name)
+                for name in zf.namelist()
+                if name.startswith("Pictures/")
+            }
         doc = load(src)
         styles, default_font = _collect_styles(doc)
         blocks: list[str] = []
         for node in doc.text.childNodes:
             if isinstance(node, Element):
-                rendered = _block_to_html(node, styles, default_font)
+                rendered = _block_to_html(node, styles, default_font, pictures=pictures)
                 if rendered:
                     blocks.append(rendered)
         return "\n".join(blocks) if blocks else "<p><br></p>"
@@ -366,6 +478,23 @@ _BLOCK_TAGS = {"p", "h1", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "li",
 
 # CSS text-align tokens we map to ODF fo:text-align on export.
 _ALIGN_VALUES = {"left", "right", "center", "justify", "start", "end"}
+
+# Inline images the editor inserts are carried as data: URLs.
+_DATA_URL = re.compile(r"^data:(image/[a-zA-Z0-9.+-]+);base64,([A-Za-z0-9+/=\s]+)$")
+
+
+def _length_to_odf(value: str | None) -> str | None:
+    """Normalise a CSS length to an ODF svg length; px -> cm (96px = 2.54cm)."""
+    if not value:
+        return None
+    v = value.strip().lower()
+    m = re.fullmatch(r"([\d.]+)\s*(px|pt|cm|mm|in|em|rem|%)", v)
+    if not m:
+        return None
+    num, unit = float(m.group(1)), m.group(2)
+    if unit == "px":
+        return f"{num * 2.54 / 96:g}cm"
+    return f"{num:g}{unit}"
 _INLINE_FORMAT_TAGS = {
     "strong": _BOLD,
     "b": _BOLD,
@@ -514,8 +643,10 @@ class _HtmlToOdt(HTMLParser):
         self.doc = OpenDocumentText()
         self._style_cache: dict[frozenset, Style] = {}
         self._style_counter = 0
-        self._align_cache: dict[str, Style] = {}
+        self._block_style_cache: dict[tuple, Style] = {}
         self._block_align: str | None = None
+        self._block_break_before: str | None = None
+        self._block_break_after: str | None = None
         self._fmt_stack: list[str] = []
         self._css_stack: list[dict[str, str]] = []  # span/font formatting
         self._fonts: set[str] = set()               # declared font faces
@@ -543,6 +674,32 @@ class _HtmlToOdt(HTMLParser):
         self._fonts.add(family)
         self.doc.fontfacedecls.addElement(FontFace(name=family, fontfamily=family))
 
+    def _add_image(self, attrs) -> None:
+        """Embed a data: URL <img> as an inline (as-character) draw:image."""
+        attr = {k.lower(): (v or "") for k, v in attrs}
+        src = attr.get("src", "")
+        m = _DATA_URL.match(src.strip())
+        if not m:
+            return  # non-data URLs aren't embedded
+        mediatype, payload = m.group(1), m.group(2)
+        try:
+            raw = base64.b64decode(payload)
+        except (ValueError, base64.binascii.Error):  # type: ignore[attr-defined]
+            return
+        href = self.doc.addPictureFromString(raw, mediatype)
+        decls = _parse_style(attr.get("style", ""))
+        frame = draw.Frame(anchortype="as-char")
+        width = _length_to_odf(attr.get("width") or decls.get("width"))
+        height = _length_to_odf(attr.get("height") or decls.get("height"))
+        if width:
+            frame.setAttribute("width", width)
+        if height:
+            frame.setAttribute("height", height)
+        frame.addElement(draw.Image(href=href))
+        if self._block is None:
+            self._new_block("p")
+        self._block.addElement(frame)
+
     def _style_for(self, props: dict[str, str]) -> Style | None:
         if not props:
             return None
@@ -557,14 +714,23 @@ class _HtmlToOdt(HTMLParser):
         return style
 
     # -- block helpers ----------------------------------------------------
-    def _align_style(self, align: str) -> Style:
-        """Paragraph style carrying a single ``fo:text-align``, cached per value."""
-        style = self._align_cache.get(align)
+    def _block_style(self, align: str | None, before: str | None,
+                     after: str | None) -> Style:
+        """Paragraph style carrying alignment and/or page-break, cached per tuple."""
+        key = (align, before, after)
+        style = self._block_style_cache.get(key)
         if style is None:
-            style = Style(name=f"Al{len(self._align_cache) + 1}", family="paragraph")
-            style.addElement(ParagraphProperties(textalign=align))
+            props: dict[str, str] = {}
+            if align:
+                props["textalign"] = align
+            if before:
+                props["breakbefore"] = before
+            if after:
+                props["breakafter"] = after
+            style = Style(name=f"Pa{len(self._block_style_cache) + 1}", family="paragraph")
+            style.addElement(ParagraphProperties(**props))
             self.doc.automaticstyles.addElement(style)
-            self._align_cache[align] = style
+            self._block_style_cache[key] = style
         return style
 
     def _new_block(self, kind: str) -> None:
@@ -573,9 +739,12 @@ class _HtmlToOdt(HTMLParser):
             self._block = H(outlinelevel=int(kind[1]))
         else:
             self._block = P()
-        if self._block_align:
-            self._block.setAttribute("stylename", self._align_style(self._block_align))
-            self._block_align = None
+        if self._block_align or self._block_break_before or self._block_break_after:
+            self._block.setAttribute("stylename", self._block_style(
+                self._block_align, self._block_break_before, self._block_break_after))
+        self._block_align = None
+        self._block_break_before = None
+        self._block_break_after = None
         self._block_kind = kind
 
     def _finish_block(self) -> None:
@@ -611,6 +780,9 @@ class _HtmlToOdt(HTMLParser):
                     self._ensure_font(props[key])
             self._css_stack.append(props)
             return
+        if tag == "img":
+            self._add_image(attrs)
+            return
         if tag in ("ul", "ol"):
             self._finish_block()
             lst = OdfList()
@@ -645,6 +817,14 @@ class _HtmlToOdt(HTMLParser):
                     break
             align = decls.get("text-align")
             self._block_align = align if align in _ALIGN_VALUES else None
+            self._block_break_before = (
+                "page" if decls.get("break-before") in ("page", "always")
+                or decls.get("page-break-before") in ("always", "page") else None
+            )
+            self._block_break_after = (
+                "page" if decls.get("break-after") in ("page", "always")
+                or decls.get("page-break-after") in ("always", "page") else None
+            )
             self._new_block(tag)
             return
 

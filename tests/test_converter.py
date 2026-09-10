@@ -249,3 +249,92 @@ def test_no_alignment_adds_no_style_attr(pure_converter):
     assert "<p>plain</p>" in back
     assert "<h3>plain heading</h3>" in back
     assert "text-align" not in back
+
+
+# -- page breaks ------------------------------------------------------------
+
+def test_roundtrip_page_break(pure_converter):
+    import io
+    import zipfile
+
+    html = '<p>before</p><p style="page-break-after: always"><br></p><p>after</p>'
+    odt = converter.html_to_odt_bytes(html)
+    content = zipfile.ZipFile(io.BytesIO(odt)).read("content.xml").decode("utf-8")
+    assert 'fo:break-after="page"' in content
+
+    back = converter.odt_bytes_to_html(odt)
+    assert 'class="page-break"' in back
+    assert "before" in back and "after" in back
+    # The marker must sit between the two paragraphs, not before the first.
+    assert back.index("before") < back.index("page-break") < back.index("after")
+
+
+def test_import_page_break_before(pure_converter):
+    from odf.opendocument import OpenDocumentText
+    from odf.style import ParagraphProperties, Style
+    from odf.text import P
+    import tempfile
+    import os
+
+    doc = OpenDocumentText()
+    pstyle = Style(name="P1", family="paragraph")
+    pstyle.addElement(ParagraphProperties(breakbefore="page"))
+    doc.automaticstyles.addElement(pstyle)
+    doc.text.addElement(P(stylename=pstyle, text="new page"))
+
+    buf = tempfile.NamedTemporaryFile(suffix=".odt", delete=False)
+    buf.close()
+    doc.save(buf.name)
+    data = open(buf.name, "rb").read()
+    os.unlink(buf.name)
+
+    html = converter.odt_bytes_to_html(data)
+    assert 'class="page-break"' in html
+    assert html.index("page-break") < html.index("new page")
+
+
+# -- inline images ----------------------------------------------------------
+
+_TINY_PNG = bytes.fromhex(
+    "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
+    "0000000d49444154789c626001000000ffff03000006000557bfabd40000000049"
+    "454e44ae426082"
+)
+
+
+def test_roundtrip_inline_image(pure_converter):
+    import base64
+    import io
+    import zipfile
+
+    src = "data:image/png;base64," + base64.b64encode(_TINY_PNG).decode("ascii")
+    html = f'<p><img src="{src}" style="width: 600px; height: 400px;" alt=""></p>'
+
+    odt = converter.html_to_odt_bytes(html)
+    z = zipfile.ZipFile(io.BytesIO(odt))
+    names = z.namelist()
+    assert any(name.startswith("Pictures/") for name in names)
+    content = z.read("content.xml").decode("utf-8")
+    assert "draw:image" in content and "xlink:href" in content
+
+    back = converter.odt_bytes_to_html(odt)
+    assert '<img src="data:image/png;base64,' in back
+    assert "width: 15.875cm;" in back   # 600px -> cm (96px = 2.54cm)
+    assert "height: 10.5833cm;" in back  # 400px -> cm
+
+
+def test_non_data_image_is_ignored(pure_converter):
+    import io
+    import zipfile
+
+    html = '<p><img src="http://example.com/x.png" alt=""></p>'
+    odt = converter.html_to_odt_bytes(html)
+    names = zipfile.ZipFile(io.BytesIO(odt)).namelist()
+    assert not any(name.startswith("Pictures/") for name in names)
+
+
+def test_length_to_odf_normalises_units():
+    assert converter._length_to_odf("600px") == "15.875cm"
+    assert converter._length_to_odf("2cm") == "2cm"
+    assert converter._length_to_odf("72pt") == "72pt"
+    assert converter._length_to_odf("") is None

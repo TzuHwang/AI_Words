@@ -301,6 +301,7 @@ document.addEventListener("click", (e) => {
     case "new": newDoc(); break;
     case "insert-hr": exec("insertHorizontalRule"); break;
     case "insert-page-break": insertPageBreak(); break;
+    case "insert-image": insertImage(); break;
     case "insert-table": insertTable(); break;
     case "insert-link": insertLink(); break;
     case "insert-symbol": insertSymbol(); break;
@@ -328,6 +329,53 @@ async function insertTable() {
 async function insertLink() {
   const url = await uiPrompt("Link URL:", "https://");
   if (url) exec("createLink", url);
+}
+
+// Insert an image chosen from disk, stored inline as a data: URL so the whole
+// document stays a single self-contained HTML fragment the converter can embed
+// into the ODT. Sizes it down to the text column width, preserving aspect.
+let imageInput = null;
+const IMAGE_MAX_WIDTH = 600;  // px, close to the A4 text column at 96dpi
+
+async function insertImage() {
+  if (!imageInput) {
+    imageInput = document.createElement("input");
+    imageInput.type = "file";
+    imageInput.accept = "image/*";
+  }
+  const picked = new Promise((resolve) => {
+    imageInput.onchange = () => {
+      const file = imageInput.files && imageInput.files[0];
+      imageInput.value = "";
+      resolve(file || null);
+    };
+    imageInput.oncancel = () => resolve(null);
+    imageInput.click();
+  });
+  const file = await picked;
+  if (!file) return;
+
+  const dataUrl = await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+
+  const size = await new Promise((resolve) => {
+    const probe = new Image();
+    probe.onload = () => resolve({ width: probe.naturalWidth, height: probe.naturalHeight });
+    probe.onerror = () => resolve(null);
+    probe.src = dataUrl;
+  });
+
+  let { width, height } = size || { width: IMAGE_MAX_WIDTH, height: IMAGE_MAX_WIDTH };
+  if (width > IMAGE_MAX_WIDTH) {
+    height = Math.round((height * IMAGE_MAX_WIDTH) / width);
+    width = IMAGE_MAX_WIDTH;
+  }
+  exec("insertHTML",
+    `<img src="${dataUrl}" style="width: ${width}px; height: ${height}px;" alt="">`);
 }
 
 // ---------------------------------------------------------------------------
@@ -699,35 +747,324 @@ function cmToPx(cm) {
   return px;
 }
 
+// ---------------------------------------------------------------------------
+// Paragraph splitting (cross-page continuation)
+//
+// A paragraph that runs past the bottom of a page is split at a *line* boundary
+// into two sibling blocks that share one logical paragraph: the continuation
+// carries `data-cont-of` -> the origin block's id. Every paginate first merges
+// the continuations back (so the document is its logical form), then re-splits
+// for the current layout. A paragraph taller than a page chains continuations.
+// ---------------------------------------------------------------------------
+let _paraSeq = 0;
+
+function remergeContinuations(root) {
+  let changed = false;
+  let mergedAny = false;
+  let cont = root.querySelector("[data-cont-of]");
+  while (cont) {
+    const prev = cont.previousElementSibling;
+    if (prev && prev.id === cont.getAttribute("data-cont-of")
+        && prev.tagName === cont.tagName) {
+      while (cont.firstChild) prev.appendChild(cont.firstChild);
+      cont.remove();
+      changed = true;
+      mergedAny = true;
+    } else {
+      // The user edited around the break; stop treating it as a continuation.
+      cont.removeAttribute("data-cont-of");
+      cont.classList.remove("para-cont");
+      changed = true;
+    }
+    cont = root.querySelector("[data-cont-of]");
+  }
+  if (mergedAny) _normalizeInlines(root);
+  return changed;
+}
+
+// A split keeps the run open on both sides, so re-merging lands two adjacent
+// identical inline elements (e.g. <strong>…</strong><strong>…</strong>) next to
+// each other; the next split/merge cycle would duplicate it again. Fold those
+// back together (and adjacent text nodes) so the paragraph stays canonical.
+function _normalizeInlines(root) {
+  const INLINE = new Set(["STRONG", "B", "EM", "I", "U", "SPAN", "A"]);
+  const mergeChildren = (node) => {
+    let prev = null;
+    let child = node.firstChild;
+    while (child) {
+      const next = child.nextSibling;
+      const bothText = prev && prev.nodeType === 3 && child.nodeType === 3;
+      const bothInline = prev && prev.nodeType === 1 && child.nodeType === 1
+        && prev.tagName === child.tagName && INLINE.has(prev.tagName)
+        && prev.getAttribute("style") === child.getAttribute("style")
+        && prev.getAttribute("href") === child.getAttribute("href")
+        && prev.getAttribute("class") === child.getAttribute("class");
+      if (bothText || bothInline) {
+        if (bothText) prev.nodeValue += child.nodeValue;
+        else while (child.firstChild) prev.appendChild(child.firstChild);
+        child.remove();
+        child = next;
+        continue;   // keep prev, re-check against the new next
+      }
+      prev = child;
+      child = next;
+    }
+  };
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
+  const elements = [root];
+  while (walker.nextNode()) elements.push(walker.currentNode);
+  for (const el of elements) mergeChildren(el);
+}
+
+function _collectText(root) {
+  const nodes = [];
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let total = 0;
+  while (walker.nextNode()) {
+    nodes.push(walker.currentNode);
+    total += walker.currentNode.nodeValue.length;
+  }
+  return { nodes, total };
+}
+
+function _textPointAt(nodes, offset) {
+  for (const node of nodes) {
+    const len = node.nodeValue.length;
+    if (offset <= len) return { node, off: offset };
+    offset -= len;
+  }
+  const last = nodes[nodes.length - 1];
+  return { node: last, off: last.nodeValue.length };
+}
+
+// A rect bottom, converted from viewport px back to the layout px the pagination
+// measures in (offsetTop lives in layout px; the zoom transform only affects
+// viewport coords). The canvas's own top padding is un-scaled, so it has to be
+// removed before dividing by the zoom factor.
+function _rectLayoutBottom(rect) {
+  const canvasRect = canvas.getBoundingClientRect();
+  const padTop = parseFloat(getComputedStyle(canvas).paddingTop) || 0;
+  return (rect.bottom - canvasRect.top - padTop + canvas.scrollTop) / zoom;
+}
+
+// Distinct line-box bottoms a range spans, ascending. `getClientRects()` can
+// report the same line once per inline element (e.g. the font <span> a paragraph
+// is wrapped in), which would double the count and defeat orphan control, so
+// they are deduplicated here.
+function _lineBottoms(range) {
+  const set = new Set();
+  for (const r of range.getClientRects()) set.add(Math.round(_rectLayoutBottom(r)));
+  return [...set].sort((a, b) => a - b);
+}
+
+function splitParagraph(block, maxBottom) {
+  const tag = block.tagName;
+  if (tag !== "P" && !/^H[1-6]$/.test(tag)) return false;
+  if (block.querySelector("img, table")) return false;   // unsplittable content
+  const text = _collectText(block);
+  if (text.total === 0) return false;
+
+  // Measure the block's line boxes and count how many still fit above
+  // `maxBottom`. Line boxes are reliable where a collapsed caret is not — a
+  // caret at a line-start boundary can report the *previous* line's bottom,
+  // which used to leave one extra (clipped) line on the page.
+  const whole = document.createRange();
+  whole.selectNodeContents(block);
+  const bottoms = _lineBottoms(whole);
+  if (!bottoms.length) return false;
+  let fit = bottoms.findIndex((b) => b > maxBottom);
+  if (fit === -1) return false;   // the whole block fits
+  if (fit === 0) return false;    // not even the first line fits
+
+  // Orphan/widow control: a continuation of a single dangling line reads as a
+  // mistake (and can split a compound word across the page). When only one line
+  // would spill over, move the break one line earlier so the next page keeps
+  // two lines — matching LibreOffice's default "no orphans" behaviour.
+  if (bottoms.length - fit < 2 && fit >= 2) fit -= 1;
+
+  // The split point is the first character of line `fit` (the first line that
+  // does not fit). Find it as the smallest offset whose prefix spans more than
+  // `fit` lines, minus one.
+  const linesUpTo = (offset) => {
+    const pt = _textPointAt(text.nodes, offset);
+    const range = document.createRange();
+    range.setStart(block, 0);
+    range.setEnd(pt.node, pt.off);
+    return _lineBottoms(range).length;
+  };
+  let lo = 1, hi = text.total;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (linesUpTo(mid) <= fit) lo = mid + 1;
+    else hi = mid;
+  }
+  const splitOffset = lo - 1;
+  if (splitOffset <= 0 || splitOffset >= text.total) return false;
+
+  if (!block.id) block.id = "para-" + (++_paraSeq);
+  const originId = block.getAttribute("data-cont-of") || block.id;
+  const pt = _textPointAt(text.nodes, splitOffset);
+
+  const range = document.createRange();
+  range.setStart(pt.node, pt.off);
+  range.setEnd(block, block.childNodes.length);
+  const frag = range.extractContents();
+
+  const cont = document.createElement(tag.toLowerCase());
+  if (block.getAttribute("class")) cont.setAttribute("class", block.getAttribute("class"));
+  cont.classList.add("para-cont");
+  if (block.getAttribute("style")) cont.setAttribute("style", block.getAttribute("style"));
+  cont.setAttribute("data-cont-of", originId);
+  cont.appendChild(frag);
+  block.insertAdjacentElement("afterend", cont);
+  return true;
+}
+
+// -- caret preservation across a merge/split --------------------------------
+function _pointOffset(node, off) {
+  const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT);
+  let offset = 0, n;
+  while ((n = walker.nextNode())) {
+    if (n === node) return offset + off;
+    offset += n.nodeValue.length;
+  }
+  return offset;
+}
+
+function editorSelectionOffsets() {
+  const sel = window.getSelection();
+  if (!sel || !sel.rangeCount) return null;
+  const range = sel.getRangeAt(0);
+  if (!editor.contains(range.commonAncestorContainer)) return null;
+  return {
+    start: _pointOffset(range.startContainer, range.startOffset),
+    end: _pointOffset(range.endContainer, range.endOffset),
+  };
+}
+
+function _offsetPoint(target) {
+  const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT);
+  let offset = 0, n, last = null;
+  while ((n = walker.nextNode())) {
+    last = n;
+    const len = n.nodeValue.length;
+    if (target <= offset + len) return { node: n, off: target - offset };
+    offset += len;
+  }
+  if (!last) return null;
+  return { node: last, off: last.nodeValue.length };
+}
+
+function restoreSelection(offs) {
+  if (!offs) return;
+  const start = _offsetPoint(offs.start);
+  const end = _offsetPoint(offs.end);
+  if (!start || !end) return;
+  const range = document.createRange();
+  range.setStart(start.node, start.off);
+  range.setEnd(end.node, end.off);
+  const sel = window.getSelection();
+  sel.removeAllRanges();
+  sel.addRange(range);
+}
+
+function splitPass(contentH, page0ContentTop) {
+  // Walk the live blocks, splitting any paragraph/heading that runs past its
+  // page's text area so the overflow continues on the next sheet. Returns
+  // whether the DOM changed.
+  //
+  // Two coordinates are tracked: `pageFirstTop` (the natural top of the page's
+  // first block — for deciding which block "starts" the page) and
+  // `pageContentTop` (the natural top of the page's *text area* — for the
+  // overflow/split budget). They differ on the first page, whose leading block
+  // keeps its own top margin above the page's top margin.
+  let changed = false;
+  const kids = editor.children;
+  if (!kids.length) return false;
+  let pageFirstTop = kids[0].offsetTop;
+  let pageContentTop = page0ContentTop;
+  for (let i = 0; i < kids.length; i++) {
+    const b = kids[i];
+    const top = b.offsetTop, height = b.offsetHeight;
+    const isFirst = Math.abs(top - pageFirstTop) <= 1;
+    const overflow = top + height - pageContentTop > contentH + 1;
+    if (overflow) {
+      if (splitParagraph(b, pageContentTop + contentH)) {
+        // b now ends on this page; the continuation it spawned starts the next.
+        changed = true;
+        pageFirstTop = b.nextElementSibling.offsetTop;
+        pageContentTop = pageFirstTop;
+        continue;
+      }
+      if (!isFirst) {
+        // No line of this block fits on the current page (or it's unsplittable):
+        // start a new page at its top and re-check it against that page — a
+        // long paragraph that begins below the current page's bottom must still
+        // be split on the page it lands on, not skipped whole.
+        pageFirstTop = top;
+        pageContentTop = top;
+        continue;
+      }
+    }
+    if (b.classList.contains("page-break") && b.nextElementSibling) {
+      pageFirstTop = b.nextElementSibling.offsetTop;
+      pageContentTop = pageFirstTop;
+    }
+  }
+  return changed;
+}
+
 function paginate() {
   const P = cmToPx(PAGE_CM);
   const G = cmToPx(GUTTER_CM);
   const M = cmToPx(MARGIN_CM);
   const contentH = P - 2 * M;              // usable text height per page
-  const blocks = Array.from(editor.children);
-  if (!blocks.length) { renderSheets([{ top: 0, height: P }]); return; }
 
-  // (1) Reset prior shifts, then read the natural layout in one pass.
-  for (const b of blocks) b.style.marginTop = "";
+  // Reset prior shifts, then bring the document back to its logical form and
+  // split it afresh for this layout. The caret is pinned across the two so a
+  // split can't throw it to the top of the page.
+  for (const b of editor.children) b.style.marginTop = "";
+  const saved = editorSelectionOffsets();
+  // Both must run every time (re-merge the previous split, then re-split for
+  // the current layout) — a short-circuit here would skip re-splitting right
+  // after a merge and make the pagination oscillate between two layouts.
+  const merged = remergeContinuations(editor);
+  const split = splitPass(contentH, M);
+  const changed = merged || split;
+
+  const blocks = Array.from(editor.children);
+  if (!blocks.length) {
+    if (changed) restoreSelection(saved);
+    renderSheets([{ top: 0, height: P }]);
+    return;
+  }
+
+  // (1) Read the natural layout in one pass.
   const tops = blocks.map((b) => b.offsetTop);
   const heights = blocks.map((b) => b.offsetHeight);
   const natMargin = blocks.map((b) => parseFloat(getComputedStyle(b).marginTop) || 0);
 
-  // (2) Assign blocks to pages using natural (continuous) coordinates.
+  // (2) Assign blocks to pages using natural (continuous) coordinates. This
+  // mirrors splitPass's page-boundary logic (page 0's text area starts at the
+  // top margin M, later pages start at their leading block) so the two passes
+  // agree on where every page ends.
   const pageOf = new Array(blocks.length);
   let page = 0;
-  let pageContentTop = tops[0];            // natural top of this page's first block
+  let pageFirstTop = tops[0];
+  let pageContentTop = M;
   for (let i = 0; i < blocks.length; i++) {
-    const isFirst = tops[i] - pageContentTop <= 1;
+    const isFirst = tops[i] - pageFirstTop <= 1;
     const overflow = tops[i] + heights[i] - pageContentTop > contentH + 1;
     if (overflow && !isFirst) {
       page += 1;
+      pageFirstTop = tops[i];
       pageContentTop = tops[i];
     }
     pageOf[i] = page;
     // A manual page break ends the current page; the next block starts fresh.
     if (blocks[i].classList.contains("page-break") && i + 1 < blocks.length) {
       page += 1;
+      pageFirstTop = tops[i + 1];
       pageContentTop = tops[i + 1];
     }
   }
@@ -763,6 +1100,7 @@ function paginate() {
   editor.style.minHeight = (Y[nPages - 1] + sheetH[nPages - 1]) + "px";
   renderSheets(rects);
   sizePageWrap();   // the page just changed height; the scroll area must follow
+  if (changed) restoreSelection(saved);
   const pc = $("#page-count");
   if (pc) pc.textContent = nPages === 1 ? "1 page" : `${nPages} pages`;
 }
@@ -794,6 +1132,9 @@ function insertPageBreak() {
 // manual break markers (turned into a real page break the exporter understands).
 function cleanDocHtml() {
   const clone = editor.cloneNode(true);
+  // Fold any cross-page continuations back into their logical paragraph, so the
+  // saved document (and what the AI sees) has one paragraph, not page fragments.
+  remergeContinuations(clone);
   clone.querySelectorAll("[style]").forEach((el) => {
     el.style.marginTop = "";
     if (!el.getAttribute("style")) el.removeAttribute("style");
@@ -902,10 +1243,14 @@ window.addEventListener("keydown", (e) => {
 
 // Tab inserts one full-width space (U+3000) — exactly one CJK character wide —
 // rather than moving focus out of the editor. execCommand keeps it undoable.
+// Ctrl/Cmd+Enter inserts a page break, matching LibreOffice Writer.
 editor.addEventListener("keydown", (e) => {
   if (e.key === "Tab" && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
     e.preventDefault();
     document.execCommand("insertText", false, "　");
+  } else if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
+    e.preventDefault();
+    insertPageBreak();
   }
 });
 // Keep the toolbar pressed-states fresh after typing/clicking inside the doc,
